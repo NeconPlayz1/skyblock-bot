@@ -30,10 +30,12 @@ async function fetchMojang(username) {
   return result;
 }
 
+const HAPI = { headers: { 'API-Key': HYPIXEL_API_KEY } };
+
 async function fetchProfiles(uuid) {
   const key = 'profiles_' + uuid;
   if (cache.has(key)) return cache.get(key);
-  const res = await axios.get('https://api.hypixel.net/skyblock/profiles?uuid=' + uuid, HAPI());
+  const res = await axios.get('https://api.hypixel.net/skyblock/profiles?uuid=' + uuid, HAPI);
   const val = res.data.profiles || [];
   cache.set(key, val);
   return val;
@@ -41,20 +43,20 @@ async function fetchProfiles(uuid) {
 
 async function fetchBazaar() {
   if (cache.has('bazaar')) return cache.get('bazaar');
-  const res = await axios.get('https://api.hypixel.net/skyblock/bazaar', HAPI());
+  const res = await axios.get('https://api.hypixel.net/skyblock/bazaar', HAPI);
   const val = res.data.products || {};
   cache.set('bazaar', val);
   return val;
 }
 
 async function fetchAH() {
-  const res = await axios.get('https://api.hypixel.net/skyblock/auctions?page=0', HAPI());
+  const res = await axios.get('https://api.hypixel.net/skyblock/auctions?page=0', HAPI);
   return res.data;
 }
 
 async function fetchMayor() {
   if (cache.has('mayor')) return cache.get('mayor');
-  const res = await axios.get('https://api.hypixel.net/resources/skyblock/election', HAPI());
+  const res = await axios.get('https://api.hypixel.net/resources/skyblock/election', HAPI);
   cache.set('mayor', res.data);
   return res.data;
 }
@@ -682,7 +684,6 @@ client.on('interactionCreate', async interaction => {
         return interaction.editReply({ embeds: [embed] });
       }
     }
-
   } catch (err) {
     console.error('Error:', err.message);
     try { await interaction.editReply('❌ ' + (err.message || 'Unknown error')); } catch(_) {}
