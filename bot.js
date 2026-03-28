@@ -32,13 +32,19 @@ const lfgStore = new Map();
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function fetchMojang(username) {
+  async function fetchMojang(username) {
   const key = `mojang_${username.toLowerCase()}`;
   if (cache.has(key)) return cache.get(key);
   const { data } = await axios.get(
-    `https://api.mojang.com/users/profiles/minecraft/${username}`
+    `https://playerdb.co/api/player/minecraft/${username}`
   );
-  cache.set(key, data);
-  return data; // { id, name }
+  if (!data.success) throw new Error('Player not found');
+  const result = {
+    id: data.data.player.raw_id,   // UUID without dashes
+    name: data.data.player.username,
+  };
+  cache.set(key, result);
+  return result;
 }
 
 async function fetchProfiles(uuid) {
