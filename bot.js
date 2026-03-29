@@ -16,13 +16,13 @@ const linkedAccounts = new Map();
 
 const HAPI = () => ({ headers: { 'API-Key': HYPIXEL_API_KEY } });
 
-// ─── API (v2 URLs) ────────────────────────────────────────────────────────────
+// ─── API ──────────────────────────────────────────────────────────────────────
 
 async function fetchMojang(username) {
   const k = 'mj_' + username.toLowerCase();
   if (cache.has(k)) return cache.get(k);
   const r = await axios.get('https://playerdb.co/api/player/minecraft/' + username);
-  if (!r.data.success) throw new Error('Player **' + username + '** not found.');
+  if (!r.data.success) throw new Error('Player **' + username + '** not found. Check the spelling.');
   const v = { id: r.data.data.player.raw_id, name: r.data.data.player.username };
   cache.set(k, v); return v;
 }
@@ -53,6 +53,19 @@ async function fetchMayor() {
   cache.set('mayor', r.data); return r.data;
 }
 
+// SkyCrypt API — full networth breakdown (same source as SkyHelper)
+async function fetchSkyCrypt(username) {
+  const k = 'sc_' + username.toLowerCase();
+  if (cache.has(k)) return cache.get(k);
+  try {
+    const r = await axios.get('https://sky.shiiyu.moe/api/v2/profile/' + username, { timeout: 10000 });
+    cache.set(k, r.data);
+    return r.data;
+  } catch(e) {
+    return null;
+  }
+}
+
 function getActive(profiles) {
   if (!profiles || !profiles.length) return null;
   return profiles.find(p => p.selected) || profiles[0];
@@ -60,12 +73,13 @@ function getActive(profiles) {
 function getMember(profile, uuid) {
   return profile && profile.members ? profile.members[uuid] || null : null;
 }
+
 async function resolveUser(interaction) {
   const v = interaction.options.getString('username');
   if (v) return v;
   const l = linkedAccounts.get(interaction.user.id);
   if (l) return l;
-  throw new Error('No username provided. Use `/link <username>` first, or provide a username.');
+  throw new Error('No username provided!\n\n**Fix:** Type `/link <username>` to link your Minecraft account, then you never need to type it again.\n**Or:** Add your username directly: `/skills username:YourName`');
 }
 
 // ─── FORMAT ───────────────────────────────────────────────────────────────────
@@ -77,13 +91,17 @@ function fmt(n) {
   if (n >= 1e3) return (n/1e3).toFixed(1)+'K';
   return Math.round(n).toLocaleString();
 }
+function fmtFull(n) {
+  if (!n || isNaN(n)) return '0';
+  return Math.round(n).toLocaleString();
+}
 
 // ─── SKILL XP ────────────────────────────────────────────────────────────────
 
 const SKILL_XP = [0,50,125,200,300,500,750,1000,1500,2000,3500,5000,7500,10000,15000,20000,30000,50000,75000,100000,200000,300000,400000,500000,600000,700000,800000,900000,1000000,1100000,1200000,1300000,1400000,1500000,1600000,1700000,1800000,1900000,2000000,2100000,2200000,2300000,2400000,2500000,2600000,2750000,2900000,3100000,3400000,3700000,4000000,4300000,4600000,5000000,5500000,6000000,6500000,7000000,7500000];
 function skillLevel(xp, max) {
   max = max||60; let lvl=0,tot=0;
-  for (let i=0;i<Math.min(max,SKILL_XP.length);i++){if(xp>=tot+SKILL_XP[i]){tot+=SKILL_XP[i];lvl=i;}else break;}
+  for(let i=0;i<Math.min(max,SKILL_XP.length);i++){if(xp>=tot+SKILL_XP[i]){tot+=SKILL_XP[i];lvl=i;}else break;}
   return lvl;
 }
 function skillAvg(m) {
@@ -104,20 +122,20 @@ function slayerLvl(xp,type){const t=SL_XP[type]||[];let l=0;for(let i=0;i<t.leng
 const DG_XP=[0,50,75,110,160,230,330,470,670,950,1340,1890,2665,3760,5260,7380,10300,14400,20000,27600,38000,52500,71500,97000,132000,180000,243000,328000,445000,600000,800000,1065000,1410000,1900000,2500000,3300000,4300000,5600000,7200000,9200000,12000000,15000000,19000000,24000000,30000000,38000000,48000000,60000000,75000000,93000000];
 function dungLvl(xp){let l=0,tot=0;for(let i=0;i<DG_XP.length;i++){if(xp>=tot+DG_XP[i]){tot+=DG_XP[i];l=i;}else break;}return l;}
 
-// ─── ACCESSORIES DATA ────────────────────────────────────────────────────────
-// MP milestones that unlock bonus stats
+// ─── ACCESSORIES ─────────────────────────────────────────────────────────────
+
 const MP_MILESTONES = [
-  { mp: 100,  bonus: '+5 Strength, +5 Crit Damage'         },
-  { mp: 150,  bonus: '+1% Crit Chance'                      },
-  { mp: 200,  bonus: '+5 Intelligence, +5 Defense'          },
-  { mp: 250,  bonus: '+1% Crit Chance'                      },
-  { mp: 300,  bonus: '+5 Strength, +5 Crit Damage'         },
-  { mp: 400,  bonus: '+5 Speed, +5 Crit Chance'             },
-  { mp: 500,  bonus: '+10 Strength, +10 Crit Damage'        },
-  { mp: 650,  bonus: '+5 Speed, +5 Crit Chance'             },
-  { mp: 800,  bonus: '+10 Intelligence, +10 Defense'        },
-  { mp: 900,  bonus: '+5 Strength, +5 Crit Damage'         },
-  { mp: 1000, bonus: '+10 Strength, +15 Crit Damage, +2% CC'},
+  { mp:100,  bonus:'+5 Strength, +5 Crit Damage'          },
+  { mp:150,  bonus:'+1% Crit Chance'                       },
+  { mp:200,  bonus:'+5 Intelligence, +5 Defense'           },
+  { mp:250,  bonus:'+1% Crit Chance'                       },
+  { mp:300,  bonus:'+5 Strength, +5 Crit Damage'          },
+  { mp:400,  bonus:'+5 Speed, +5 Crit Chance'              },
+  { mp:500,  bonus:'+10 Strength, +10 Crit Damage'         },
+  { mp:650,  bonus:'+5 Speed, +5 Crit Chance'              },
+  { mp:800,  bonus:'+10 Intelligence, +10 Defense'         },
+  { mp:900,  bonus:'+5 Strength, +5 Crit Damage'          },
+  { mp:1000, bonus:'+10 Strength, +15 Crit Damage, +2% CC' },
 ];
 
 const ACC = [
@@ -184,7 +202,6 @@ const ACC = [
   { name:'Beacon 3',                 tier:'Rare',      mp:8,  cost:200000,   cat:'Utility',  desc:'+15 stats in beacon range' },
   { name:'Beacon 4',                 tier:'Epic',      mp:12, cost:1000000,  cat:'Utility',  desc:'+20 stats in beacon range' },
   { name:'Beacon 5',                 tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'+25 stats in beacon range' },
-  { name:'Jungle Key',               tier:'Rare',      mp:8,  cost:20000,    cat:'Utility',  desc:'Access jungle miniboss' },
   { name:'Bait Ring',                tier:'Uncommon',  mp:5,  cost:8000,     cat:'Fishing',  desc:'+10% Sea Creature chance' },
   { name:'Shark Scale Ring',         tier:'Rare',      mp:8,  cost:40000,    cat:'Fishing',  desc:'+15% Sea Creature chance' },
   { name:'Shark Scale Artifact',     tier:'Epic',      mp:12, cost:200000,   cat:'Fishing',  desc:'+25% Sea Creature chance' },
@@ -195,60 +212,41 @@ const ACC = [
   { name:'Titanium Talisman',        tier:'Uncommon',  mp:5,  cost:15000,    cat:'Mining',   desc:'+5 Mining Speed in Dwarven Mines' },
   { name:'Titanium Ring',            tier:'Rare',      mp:8,  cost:60000,    cat:'Mining',   desc:'+10 Mining Speed in Dwarven Mines' },
   { name:'Titanium Artifact',        tier:'Epic',      mp:12, cost:300000,   cat:'Mining',   desc:'+15 Mining Speed in Dwarven Mines' },
-  { name:'Treasure Hunter Talisman', tier:'Uncommon',  mp:5,  cost:10000,    cat:'Utility',  desc:'Extra loot from treasure chests' },
-  { name:'Treasure Hunter Ring',     tier:'Rare',      mp:8,  cost:50000,    cat:'Utility',  desc:'More extra loot' },
-  { name:'Treasure Hunter Artifact', tier:'Epic',      mp:12, cost:250000,   cat:'Utility',  desc:'Much more extra loot' },
 ];
 
-// ─── KUUDRA DATA ─────────────────────────────────────────────────────────────
+// ─── KUUDRA DATA ──────────────────────────────────────────────────────────────
 
 const TIERS = {
-  basic:    { label:'Basic (T1)',    color:0x55FF55, minEHP:15000,  recCata:10,
-    setup:{ armor:'Any Crimson Armor (Hot quality fine)', weapon:'Midas Staff / Spirit Sceptre', pet:'Blaze Lvl 100 or Tiger', acc:'Full Talisman Bag (Common-Rare)', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Easiest tier. 15k+ EHP and any crimson set.' },
-    profit:{ avgLoot:80000, keyCost:40000 },
-    guide:['**Phase 1:** Sprint to supplies, ignore minions.','**Phase 2:** Dump supplies, protect builders.','**Phase 3:** Ballista stuns Kuudra, DPS weak spot.','**Phase 4:** Open paid chest for loot.','**Tip:** Crimson Key required to open chest.'] },
-  hot:      { label:'Hot (T2)',      color:0xFF5555, minEHP:30000,  recCata:15,
-    setup:{ armor:'Fine or Burning Crimson Armor (full set)', weapon:'Aurora Staff / Starred Midas', pet:'Blaze Lvl 100', acc:'Full Talisman Bag (up to Epic)', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Aim 30k+ EHP. Swap Boots to Magma Lord if available.' },
-    profit:{ avgLoot:220000, keyCost:100000 },
-    guide:['**Phase 1:** Faster supply collection than Basic.','**Phase 2:** More minions spawn, one player guard.','**Phase 3:** Kuudra hits harder, dodge projectiles.','**Tip:** Mana potions help sustain staff usage.'] },
-  burning:  { label:'Burning (T3)',  color:0xFF8800, minEHP:60000,  recCata:20,
-    setup:{ armor:'Burning Crimson Armor or better', weapon:'Aurora Staff / Starred Midas', pet:'Blaze Lvl 100 with Tier Boost', acc:'Full Talisman Bag (Epic+), Mana Flask', reforge:'Fierce Chest, Necrotic/Warped Helm, Bloody Legs/Boots', notes:'Need 60k+ EHP. Aim for 4M+ HP pool with pots.' },
-    profit:{ avgLoot:650000, keyCost:300000 },
-    guide:['**Phase 1:** Use Speed pot, collect supplies within 45s.','**Phase 2:** Protect builders aggressively.','**Phase 3:** Ballista needs 2 hits. Watch for waves.','**Tip:** Strength Pots and God Pot improve DPS.'] },
-  fiery:    { label:'Fiery (T4)',    color:0xFF2200, minEHP:120000, recCata:25,
-    setup:{ armor:'Fiery Crimson Armor (all pieces)', weapon:'Infernal/Aurora Staff or Starred Midas', pet:'Blaze Lvl 100 Tier Boost or Black Cat Lvl 100', acc:'Full Talisman Bag (Legendary), Mana Flask', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Need 120k+ EHP. Must use Overload 5 + God Pot.' },
-    profit:{ avgLoot:2200000, keyCost:1000000 },
-    guide:['**Phase 1:** Finish supply run under 40s.','**Phase 2:** Minion waves much stronger, tank/healer needed.','**Phase 3:** Ballista takes 3 hits. Kuudra does AoE.','**Tip:** Always use Overload + God Pot. Coordinate.'] },
-  infernal: { label:'Infernal (T5)', color:0x8800FF, minEHP:300000, recCata:30,
-    setup:{ armor:'Infernal Crimson Armor (best quality)', weapon:'Infernal Staff Starred / Shadow Fury', pet:'Blaze Lvl 100 Tier Boost or Ender Dragon Lvl 100', acc:'Fully optimized Talisman Bag (Recombobulated + MP reforged)', reforge:'Fierce Chest, Necrotic Helm, Withered/Bloody Legs/Boots', notes:'Need 300k+ EHP. Overload 5, God Pot, Mana Flask, Adrenaline required.' },
-    profit:{ avgLoot:9000000, keyCost:4000000 },
-    guide:['**Phase 1:** Perfect supply run, under 35s.','**Phase 2:** Extremely strong minions, coordinate roles.','**Phase 3:** Ballista 4+ hits. Constant AoE. Do NOT facetank.','**Phase 4:** Infernal chests drop 10M+ items.','**Tip:** Best-in-slot required. One weak player can wipe team.'] },
+  basic:    { label:'Basic (T1)',    color:0x55FF55, minEHP:15000,  recCata:10,  setup:{ armor:'Any Crimson Armor (Hot quality fine)', weapon:'Midas Staff / Spirit Sceptre', pet:'Blaze Lvl 100 or Tiger', acc:'Full Talisman Bag (Common-Rare)', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Easiest tier. 15k+ EHP and any crimson set.' }, profit:{ avgLoot:80000, keyCost:40000 }, guide:['**Phase 1:** Sprint to supplies, ignore minions.','**Phase 2:** Dump supplies, protect builders.','**Phase 3:** Ballista stuns Kuudra, DPS weak spot.','**Phase 4:** Open paid chest for loot.','**Tip:** Crimson Key required to open chest.'] },
+  hot:      { label:'Hot (T2)',      color:0xFF5555, minEHP:30000,  recCata:15,  setup:{ armor:'Fine or Burning Crimson Armor (full set)', weapon:'Aurora Staff / Starred Midas', pet:'Blaze Lvl 100', acc:'Full Talisman Bag (up to Epic)', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Aim 30k+ EHP. Swap Boots to Magma Lord if available.' }, profit:{ avgLoot:220000, keyCost:100000 }, guide:['**Phase 1:** Faster supply collection than Basic.','**Phase 2:** More minions spawn, one player guard.','**Phase 3:** Kuudra hits harder, dodge projectiles.','**Tip:** Mana potions help sustain staff usage.'] },
+  burning:  { label:'Burning (T3)',  color:0xFF8800, minEHP:60000,  recCata:20,  setup:{ armor:'Burning Crimson Armor or better', weapon:'Aurora Staff / Starred Midas', pet:'Blaze Lvl 100 with Tier Boost', acc:'Full Talisman Bag (Epic+), Mana Flask', reforge:'Fierce Chest, Necrotic/Warped Helm, Bloody Legs/Boots', notes:'Need 60k+ EHP. Aim for 4M+ HP pool with pots.' }, profit:{ avgLoot:650000, keyCost:300000 }, guide:['**Phase 1:** Use Speed pot, collect supplies within 45s.','**Phase 2:** Protect builders aggressively.','**Phase 3:** Ballista needs 2 hits. Watch for waves.','**Tip:** Strength Pots and God Pot improve DPS.'] },
+  fiery:    { label:'Fiery (T4)',    color:0xFF2200, minEHP:120000, recCata:25,  setup:{ armor:'Fiery Crimson Armor (all pieces)', weapon:'Infernal/Aurora Staff or Starred Midas', pet:'Blaze Lvl 100 Tier Boost or Black Cat Lvl 100', acc:'Full Talisman Bag (Legendary), Mana Flask', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Need 120k+ EHP. Must use Overload 5 + God Pot.' }, profit:{ avgLoot:2200000, keyCost:1000000 }, guide:['**Phase 1:** Finish supply run under 40s.','**Phase 2:** Minion waves much stronger, tank/healer needed.','**Phase 3:** Ballista takes 3 hits. Kuudra does AoE.','**Tip:** Always use Overload + God Pot. Coordinate.'] },
+  infernal: { label:'Infernal (T5)', color:0x8800FF, minEHP:300000, recCata:30,  setup:{ armor:'Infernal Crimson Armor (best quality)', weapon:'Infernal Staff Starred / Shadow Fury', pet:'Blaze Lvl 100 Tier Boost or Ender Dragon Lvl 100', acc:'Fully optimized Talisman Bag (Recombobulated + MP reforged)', reforge:'Fierce Chest, Necrotic Helm, Withered/Bloody Legs/Boots', notes:'Need 300k+ EHP. Overload 5, God Pot, Mana Flask, Adrenaline required.' }, profit:{ avgLoot:9000000, keyCost:4000000 }, guide:['**Phase 1:** Perfect supply run, under 35s.','**Phase 2:** Extremely strong minions, coordinate roles.','**Phase 3:** Ballista 4+ hits. Constant AoE. Do NOT facetank.','**Phase 4:** Infernal chests drop 10M+ items.','**Tip:** Best-in-slot required. One weak player can wipe team.'] },
 };
 
 // ─── COMMANDS ─────────────────────────────────────────────────────────────────
 
 const TC = [
-  { name:'Basic (T1)',    value:'basic'    },
-  { name:'Hot (T2)',      value:'hot'      },
-  { name:'Burning (T3)', value:'burning'  },
-  { name:'Fiery (T4)',   value:'fiery'    },
-  { name:'Infernal (T5)',value:'infernal' },
+  { name:'Basic (T1)',   value:'basic'    },
+  { name:'Hot (T2)',     value:'hot'      },
+  { name:'Burning (T3)',value:'burning'  },
+  { name:'Fiery (T4)',  value:'fiery'    },
+  { name:'Infernal (T5)',value:'infernal'},
 ];
-
-const uOpt = o => o.setName('username').setDescription('Minecraft username (skip if account linked)').setRequired(false);
+const uOpt = o => o.setName('username').setDescription('Minecraft username (skip if you used /link)').setRequired(false);
 
 const commands = [
-  new SlashCommandBuilder().setName('link').setDescription('Link your Minecraft account to Discord')
+  new SlashCommandBuilder().setName('link').setDescription('Link your Minecraft account — do this first!')
     .addStringOption(o => o.setName('username').setDescription('Your Minecraft username').setRequired(true)),
   new SlashCommandBuilder().setName('unlink').setDescription('Unlink your Minecraft account'),
   new SlashCommandBuilder().setName('whoami').setDescription('Show your linked Minecraft account'),
   new SlashCommandBuilder().setName('stats').setDescription('View a player\'s Skyblock stats').addStringOption(uOpt),
-  new SlashCommandBuilder().setName('networth').setDescription('Check a player\'s coin networth').addStringOption(uOpt),
+  new SlashCommandBuilder().setName('networth').setDescription('Full SkyHelper-style networth breakdown').addStringOption(uOpt),
   new SlashCommandBuilder().setName('skills').setDescription('View a player\'s skill levels').addStringOption(uOpt),
   new SlashCommandBuilder().setName('slayer').setDescription('View a player\'s slayer boss levels').addStringOption(uOpt),
   new SlashCommandBuilder().setName('dungeons').setDescription('View a player\'s Catacombs stats').addStringOption(uOpt),
   new SlashCommandBuilder().setName('profile').setDescription('Show a player\'s profile list').addStringOption(uOpt),
-  new SlashCommandBuilder().setName('compare').setDescription('Compare two players\' stats')
+  new SlashCommandBuilder().setName('compare').setDescription('Compare two players')
     .addStringOption(o => o.setName('player1').setDescription('First player').setRequired(true))
     .addStringOption(o => o.setName('player2').setDescription('Second player').setRequired(true)),
   new SlashCommandBuilder().setName('bazaar').setDescription('Check Bazaar prices')
@@ -260,80 +258,71 @@ const commands = [
 
   new SlashCommandBuilder().setName('accessories').setDescription('Accessories / talisman tools')
     .addSubcommand(s => s.setName('budget')
-      .setDescription('Plan accessories within your budget & reach a target Magic Power')
-      // required first
-      .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget (e.g. 5000000)').setRequired(true).setMinValue(1000))
-      .addStringOption(o => o.setName('goal').setDescription('What are you building toward?').setRequired(true).addChoices(
+      .setDescription('Plan accessories within your budget')
+      .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget').setRequired(true).setMinValue(1000))
+      .addStringOption(o => o.setName('goal').setDescription('Build goal').setRequired(true).addChoices(
         { name:'Combat DPS',       value:'combat'    },
         { name:'Dungeons',         value:'dungeons'  },
         { name:'All-round',        value:'allround'  },
         { name:'Speed / QoL',      value:'speed'     },
         { name:'Mining / Farming', value:'gathering' },
       ))
-      // optional last
-      .addIntegerOption(o => o.setName('target_mp').setDescription('Target Magic Power you want to reach (e.g. 300)').setMinValue(1).setMaxValue(1000))
-      .addStringOption(o => o.setName('current_mp').setDescription('Your current Magic Power (e.g. 150)'))
-      .addStringOption(o => o.setName('tier_limit').setDescription('Max talisman tier to buy').addChoices(
+      .addIntegerOption(o => o.setName('target_mp').setDescription('Target Magic Power (e.g. 300)').setMinValue(1).setMaxValue(1000))
+      .addIntegerOption(o => o.setName('current_mp').setDescription('Your current Magic Power').setMinValue(0))
+      .addStringOption(o => o.setName('tier_limit').setDescription('Max talisman tier').addChoices(
         { name:'Common only',     value:'Common'    },
         { name:'Up to Uncommon',  value:'Uncommon'  },
         { name:'Up to Rare',      value:'Rare'      },
         { name:'Up to Epic',      value:'Epic'      },
         { name:'Up to Legendary', value:'Legendary' },
       )))
-    .addSubcommand(s => s.setName('milestones')
-      .setDescription('See all MP milestones and what bonus stats they unlock'))
+    .addSubcommand(s => s.setName('milestones').setDescription('See all MP milestone bonuses'))
     .addSubcommand(s => s.setName('list')
       .setDescription('Browse accessories by category')
-      .addStringOption(o => o.setName('category').setDescription('Category filter').addChoices(
+      .addStringOption(o => o.setName('category').setDescription('Category').addChoices(
         { name:'Combat',   value:'Combat'   },{ name:'Speed',    value:'Speed'    },
         { name:'Defense',  value:'Defense'  },{ name:'Dungeons', value:'Dungeons' },
         { name:'Utility',  value:'Utility'  },{ name:'Fishing',  value:'Fishing'  },
         { name:'Mining',   value:'Mining'   },{ name:'Farming',  value:'Farming'  },
       )))
     .addSubcommand(s => s.setName('upgrade')
-      .setDescription('Best Magic Power picks within budget')
-      // required first
+      .setDescription('Best MP/coin picks within budget')
       .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget').setRequired(true).setMinValue(1000))
-      // optional last
-      .addIntegerOption(o => o.setName('current_mp').setDescription('Your current MP (shows next milestone progress)').setMinValue(0))),
+      .addIntegerOption(o => o.setName('current_mp').setDescription('Your current MP').setMinValue(0))),
 
   new SlashCommandBuilder().setName('kuudra').setDescription('All Kuudra commands')
     .addSubcommand(s => s.setName('setup').setDescription('Best gear setup for a tier')
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC)))
     .addSubcommand(s => s.setName('profit').setDescription('Profit calculator')
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC))
-      .addIntegerOption(o => o.setName('runs').setDescription('Number of runs (default 1)').setMinValue(1).setMaxValue(10000)))
+      .addIntegerOption(o => o.setName('runs').setDescription('Number of runs').setMinValue(1).setMaxValue(10000)))
     .addSubcommand(s => s.setName('requirements').setDescription('Check if a player is ready for a tier')
-      // required first
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC))
-      // optional last
       .addStringOption(o => o.setName('username').setDescription('Minecraft username (skip if linked)').setRequired(false)))
     .addSubcommand(s => s.setName('lfg').setDescription('Post a Looking-for-Group message')
-      // required first
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC))
       .addStringOption(o => o.setName('role').setDescription('Your role').setRequired(true).addChoices(
         { name:'Mage',   value:'Mage'    },{ name:'Berserk',value:'Berserk' },
         { name:'Tank',   value:'Tank'    },{ name:'Healer', value:'Healer'  },
         { name:'Archer', value:'Archer'  },
       ))
-      // optional last
-      .addStringOption(o => o.setName('note').setDescription('Extra info (IGN, EHP, etc.)').setRequired(false)))
+      .addStringOption(o => o.setName('note').setDescription('Extra info').setRequired(false)))
     .addSubcommand(s => s.setName('parties').setDescription('View active LFG parties')
       .addStringOption(o => o.setName('tier').setDescription('Filter by tier').addChoices(...TC, { name:'All Tiers',value:'all' })))
     .addSubcommand(s => s.setName('guide').setDescription('Phase-by-phase strategy guide')
-      .addStringOption(o => o.setName('tier').setDescription('Tier guide (empty = general)').addChoices(...TC)))
+      .addStringOption(o => o.setName('tier').setDescription('Tier guide').addChoices(...TC)))
     .addSubcommand(s => s.setName('tiers').setDescription('Overview of all Kuudra tiers')),
 
 ].map(c => c.toJSON());
 
-// ─── REGISTER ─────────────────────────────────────────────────────────────────
+// ─── REGISTER ────────────────────────────────────────────────────────────────
 
 async function registerCommands() {
   const rest = new REST({ version:'10' }).setToken(DISCORD_TOKEN);
   try {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log('Registered ' + commands.length + ' commands!');
-  } catch (e) { console.error('Register failed:', e.message); }
+  } catch(e) { console.error('Register failed:', e.message); }
 }
 
 client.once('ready', async () => {
@@ -351,39 +340,34 @@ client.on('interactionCreate', async interaction => {
     const cmd = interaction.commandName;
     const sub = interaction.options.getSubcommand(false);
 
-    // ── /link ────────────────────────────────────────────────────────────────
+    // /link
     if (cmd === 'link') {
       const mojang = await fetchMojang(interaction.options.getString('username'));
       linkedAccounts.set(interaction.user.id, mojang.name);
       return interaction.editReply({ embeds:[new EmbedBuilder()
         .setTitle('Account Linked!').setColor(0x00FF88)
         .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
-        .setDescription('Linked to **'+mojang.name+'**!\nYou can now use all commands without typing your username.')
+        .setDescription('Linked to **'+mojang.name+'**!\nAll commands now work without typing your username.')
         .setTimestamp()] });
     }
 
-    // ── /unlink ──────────────────────────────────────────────────────────────
+    // /unlink
     if (cmd === 'unlink') {
       if (!linkedAccounts.has(interaction.user.id)) return interaction.editReply('No linked account found.');
       const old = linkedAccounts.get(interaction.user.id);
       linkedAccounts.delete(interaction.user.id);
-      return interaction.editReply({ embeds:[new EmbedBuilder()
-        .setTitle('Account Unlinked').setColor(0xFF4444)
-        .setDescription('Unlinked **'+old+'** from your Discord.').setTimestamp()] });
+      return interaction.editReply({ embeds:[new EmbedBuilder().setTitle('Account Unlinked').setColor(0xFF4444).setDescription('Unlinked **'+old+'**.').setTimestamp()] });
     }
 
-    // ── /whoami ──────────────────────────────────────────────────────────────
+    // /whoami
     if (cmd === 'whoami') {
       const l = linkedAccounts.get(interaction.user.id);
-      if (!l) return interaction.editReply('No account linked. Use `/link <username>` first.');
+      if (!l) return interaction.editReply('No account linked. Use `/link <username>` first!');
       const mojang = await fetchMojang(l);
-      return interaction.editReply({ embeds:[new EmbedBuilder()
-        .setTitle('Your Linked Account').setColor(0x00AAFF)
-        .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
-        .setDescription('Linked to **'+mojang.name+'**').setTimestamp()] });
+      return interaction.editReply({ embeds:[new EmbedBuilder().setTitle('Your Linked Account').setColor(0x00AAFF).setThumbnail('https://mc-heads.net/avatar/'+mojang.id).setDescription('Linked to **'+mojang.name+'**').setTimestamp()] });
     }
 
-    // ── /stats ───────────────────────────────────────────────────────────────
+    // /stats
     if (cmd === 'stats') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
@@ -410,32 +394,115 @@ client.on('interactionCreate', async interaction => {
         ).setTimestamp()] });
     }
 
-    // ── /networth ────────────────────────────────────────────────────────────
+    // /networth — SkyHelper style using SkyCrypt API
     if (cmd === 'networth') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
+
+      // Fetch from SkyCrypt for full breakdown
+      const sc = await fetchSkyCrypt(mojang.name);
+
+      // Also fetch Hypixel for coins
       const profiles = await fetchProfiles(mojang.id);
       const profile  = getActive(profiles);
       const member   = getMember(profile, mojang.id);
-      if (!member) return interaction.editReply('No Skyblock data found.');
-      const purse=member.coin_purse||0, bank=profile.banking?.balance||0;
-      return interaction.editReply({ embeds:[new EmbedBuilder()
-        .setTitle(mojang.name+"'s Networth").setColor(0xFFD700)
-        .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
-        .setDescription('Liquid coins shown. For full item networth check **sky.shiiyu.moe**')
-        .addFields(
-          { name:'Purse',        value:fmt(purse),      inline:true },
-          { name:'Bank',         value:fmt(bank),        inline:true },
-          { name:'Total Liquid', value:fmt(purse+bank),  inline:true },
-        ).setTimestamp()] });
+      const purse    = member ? (member.coin_purse || 0) : 0;
+      const bank     = profile ? (profile.banking?.balance || 0) : 0;
+
+      const embed = new EmbedBuilder()
+        .setTitle(mojang.name+"'s Networth")
+        .setColor(0xFFD700)
+        .setThumbnail('https://mc-heads.net/avatar/'+mojang.id);
+
+      if (sc) {
+        // Find active profile data from SkyCrypt
+        const profileNames = Object.keys(sc.profiles || {});
+        let activeProfile = null;
+        for (const name of profileNames) {
+          if (sc.profiles[name].current) { activeProfile = sc.profiles[name]; break; }
+        }
+        if (!activeProfile && profileNames.length) activeProfile = sc.profiles[profileNames[0]];
+
+        const nw = activeProfile?.data?.networth;
+        if (nw) {
+          const total   = nw.networth    || 0;
+          const unsoul  = nw.unsoulbound || 0;
+
+          embed.setDescription('**Total Networth: ' + fmt(total) + '**\n*(Unsoulbound: ' + fmt(unsoul) + ')*');
+
+          // Category breakdown
+          const cats = nw.categories || {};
+          const fields = [
+            ['armor',       'Armor'            ],
+            ['equipment',   'Equipment'        ],
+            ['wardrobe',    'Wardrobe'         ],
+            ['inventory',   'Inventory'        ],
+            ['ender_chest', 'Ender Chest'      ],
+            ['accessories', 'Accessories'      ],
+            ['storage',     'Storage'          ],
+            ['pets',        'Pets'             ],
+            ['fishing_bag', 'Fishing Bag'      ],
+            ['potion_bag',  'Potion Bag'       ],
+            ['museum',      'Museum'           ],
+            ['sacks',       'Sacks'            ],
+          ];
+
+          const catLines = fields
+            .filter(([k]) => cats[k] && cats[k].total > 0)
+            .sort((a, b) => (cats[b[0]]?.total||0) - (cats[a[0]]?.total||0))
+            .map(([k, label]) => '**'+label+':** '+fmt(cats[k].total));
+
+          if (catLines.length) {
+            // Split into two columns
+            const half = Math.ceil(catLines.length / 2);
+            embed.addFields(
+              { name:'Breakdown', value: catLines.slice(0, half).join('\n') || '-', inline:true },
+              { name:'\u200b',    value: catLines.slice(half).join('\n')    || '-', inline:true },
+            );
+          }
+
+          embed.addFields(
+            { name:'💵 Purse', value:fmt(purse), inline:true },
+            { name:'🏦 Bank',  value:fmt(bank),  inline:true },
+            { name:'💰 Coins', value:fmt(purse+bank), inline:true },
+          );
+
+          // Top items if available
+          const items = nw.items || [];
+          if (items.length) {
+            const top5 = items.sort((a,b) => (b.price||0)-(a.price||0)).slice(0,5);
+            const topLines = top5.map((it,i) => (i+1)+'. **'+it.name+'** — '+fmt(it.price));
+            embed.addFields({ name:'💎 Top Items', value: topLines.join('\n'), inline:false });
+          }
+
+        } else {
+          // SkyCrypt worked but no networth data
+          embed.setDescription('**Liquid Coins: '+fmt(purse+bank)+'**\n\n> SkyCrypt loaded but networth data unavailable for this profile.\n> Check [sky.shiiyu.moe/stats/'+mojang.name+'](https://sky.shiiyu.moe/stats/'+mojang.name+') for full details.')
+            .addFields(
+              { name:'Purse', value:fmt(purse), inline:true },
+              { name:'Bank',  value:fmt(bank),  inline:true },
+            );
+        }
+      } else {
+        // SkyCrypt unavailable — show coins only
+        embed.setDescription('**Liquid Coins: '+fmt(purse+bank)+'**\n\n> Full item networth temporarily unavailable.\n> Check [sky.shiiyu.moe/stats/'+mojang.name+'](https://sky.shiiyu.moe/stats/'+mojang.name+') for complete breakdown.')
+          .addFields(
+            { name:'Purse', value:fmt(purse), inline:true },
+            { name:'Bank',  value:fmt(bank),  inline:true },
+          );
+      }
+
+      embed.setFooter({ text:'Powered by SkyCrypt (sky.shiiyu.moe) • Data cached 5 min' }).setTimestamp();
+      return interaction.editReply({ embeds:[embed] });
     }
 
-    // ── /skills ──────────────────────────────────────────────────────────────
+    // /skills
     if (cmd === 'skills') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
-      const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
-      if (!member) return interaction.editReply('No Skyblock data found.');
+      const profiles = await fetchProfiles(mojang.id);
+      const member   = getMember(getActive(profiles), mojang.id);
+      if (!member) return interaction.editReply('No Skyblock data found for **'+mojang.name+'**.');
       const list=[['farming',60],['mining',60],['combat',60],['foraging',50],['fishing',50],['enchanting',60],['alchemy',50],['taming',50],['carpentry',50],['runecrafting',25]];
       const lines=list.map(([k,max])=>{
         const xp=member['experience_skill_'+k]||0, lvl=skillLevel(xp,max);
@@ -450,7 +517,7 @@ client.on('interactionCreate', async interaction => {
         .setTimestamp()] });
     }
 
-    // ── /slayer ──────────────────────────────────────────────────────────────
+    // /slayer
     if (cmd === 'slayer') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
@@ -471,7 +538,7 @@ client.on('interactionCreate', async interaction => {
         .setTimestamp()] });
     }
 
-    // ── /dungeons ────────────────────────────────────────────────────────────
+    // /dungeons
     if (cmd === 'dungeons') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
@@ -492,7 +559,7 @@ client.on('interactionCreate', async interaction => {
         ).setTimestamp()] });
     }
 
-    // ── /profile ─────────────────────────────────────────────────────────────
+    // /profile
     if (cmd === 'profile') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
@@ -509,7 +576,7 @@ client.on('interactionCreate', async interaction => {
         .setDescription(lines.join('\n\n')).setTimestamp()] });
     }
 
-    // ── /compare ─────────────────────────────────────────────────────────────
+    // /compare
     if (cmd === 'compare') {
       const [m1,m2]=await Promise.all([fetchMojang(interaction.options.getString('player1')),fetchMojang(interaction.options.getString('player2'))]);
       const [p1,p2]=await Promise.all([fetchProfiles(m1.id),fetchProfiles(m2.id)]);
@@ -530,7 +597,7 @@ client.on('interactionCreate', async interaction => {
         ).setTimestamp()] });
     }
 
-    // ── /bazaar ──────────────────────────────────────────────────────────────
+    // /bazaar
     if (cmd === 'bazaar') {
       const query=interaction.options.getString('item').toUpperCase().replace(/ /g,'_');
       const products=await fetchBazaar();
@@ -546,7 +613,7 @@ client.on('interactionCreate', async interaction => {
       return interaction.editReply({ embeds:[embed] });
     }
 
-    // ── /auction ─────────────────────────────────────────────────────────────
+    // /auction
     if (cmd === 'auction') {
       const query=interaction.options.getString('item').toLowerCase();
       const ahData=await fetchAH();
@@ -558,7 +625,7 @@ client.on('interactionCreate', async interaction => {
       return interaction.editReply({ embeds:[embed] });
     }
 
-    // ── /mayor ───────────────────────────────────────────────────────────────
+    // /mayor
     if (cmd === 'mayor') {
       const data=await fetchMayor(), mayor=data?.mayor;
       if (!mayor) return interaction.editReply('Could not fetch mayor data.');
@@ -571,207 +638,130 @@ client.on('interactionCreate', async interaction => {
       return interaction.editReply({ embeds:[embed] });
     }
 
-    // ── /help ────────────────────────────────────────────────────────────────
+    // /help
     if (cmd === 'help') {
       return interaction.editReply({ embeds:[new EmbedBuilder()
         .setTitle('Hypixel Skyblock Bot — All Commands').setColor(0x00FFFF)
-        .setDescription('> Tip: Use `/link <username>` once and skip typing your name every time!')
+        .setDescription('> **Start here:** Type `/link <yourUsername>` first so you never need to type your name again!')
         .addFields(
-          { name:'🔗 Linking',    value:'/link\n/unlink\n/whoami', inline:true },
+          { name:'🔗 Linking',    value:'/link — Link MC account\n/unlink — Remove link\n/whoami — Show link', inline:true },
           { name:'📊 Stats',      value:'/stats\n/networth\n/skills\n/slayer\n/dungeons\n/profile\n/compare', inline:true },
           { name:'🏪 Economy',    value:'/bazaar\n/auction\n/mayor', inline:true },
-          { name:'💍 Accessories', value:'/accessories budget — Budget planner with MP target\n/accessories milestones — All MP milestone bonuses\n/accessories list — Browse all accessories\n/accessories upgrade — Best MP/coin picks', inline:false },
+          { name:'💍 Accessories', value:'/accessories budget\n/accessories milestones\n/accessories list\n/accessories upgrade', inline:false },
           { name:'🔥 Kuudra',     value:'/kuudra setup\n/kuudra profit\n/kuudra requirements\n/kuudra lfg\n/kuudra parties\n/kuudra guide\n/kuudra tiers', inline:false },
         ).setFooter({ text:'Hypixel Skyblock Bot' }).setTimestamp()] });
     }
 
-    // ── /accessories ─────────────────────────────────────────────────────────
+    // /accessories
     if (cmd === 'accessories') {
 
-      // ── budget ─────────────────────────────────────────────────────────────
       if (sub === 'budget') {
         const budget    = interaction.options.getInteger('budget');
         const goal      = interaction.options.getString('goal');
         const tierLimit = interaction.options.getString('tier_limit') || 'Legendary';
         const targetMP  = interaction.options.getInteger('target_mp') || null;
-        const currentMPraw = interaction.options.getString('current_mp');
-        const currentMP = currentMPraw ? parseInt(currentMPraw) || 0 : 0;
+        const currentMP = interaction.options.getInteger('current_mp') || 0;
+        const tOrder    = ['Common','Uncommon','Rare','Epic','Legendary'];
+        const maxIdx    = tOrder.indexOf(tierLimit);
+        const gCats     = { combat:['Combat'], dungeons:['Dungeons','Combat','Defense'], allround:['Combat','Defense','Utility','Speed'], speed:['Speed','Utility'], gathering:['Mining','Farming','Fishing','Utility'] };
+        const wanted    = gCats[goal] || [];
 
-        const tOrder = ['Common','Uncommon','Rare','Epic','Legendary'];
-        const maxIdx = tOrder.indexOf(tierLimit);
-        const gCats  = {
-          combat:    ['Combat'],
-          dungeons:  ['Dungeons','Combat','Defense'],
-          allround:  ['Combat','Defense','Utility','Speed'],
-          speed:     ['Speed','Utility'],
-          gathering: ['Mining','Farming','Fishing','Utility'],
-        };
-        const wanted = gCats[goal] || [];
+        let sortedAcc = ACC.filter(a => tOrder.indexOf(a.tier) <= maxIdx)
+          .map(a => ({ ...a, pri: wanted.includes(a.cat) ? 1 : 2, mppc: a.mp/a.cost }))
+          .sort((a,b) => a.pri - b.pri || b.mppc - a.mppc);
 
-        // If target MP set, find cheapest way to reach it
-        let sortedAcc = ACC.filter(a => tOrder.indexOf(a.tier) <= maxIdx);
-        if (targetMP && targetMP > currentMP) {
-          const needed = targetMP - currentMP;
-          // Sort: wanted categories first, then by MP/cost ratio
-          sortedAcc = sortedAcc
-            .map(a => ({ ...a, pri: wanted.includes(a.cat) ? 1 : 2, mppc: a.mp / a.cost }))
-            .sort((a, b) => a.pri - b.pri || b.mppc - a.mppc);
-          // Try to reach target MP with minimum spend
-          let rem = budget, gained = 0, spent = 0;
-          const bought = [];
-          for (const a of sortedAcc) {
-            if (gained >= needed) break;
-            if (rem >= a.cost) { bought.push(a); rem -= a.cost; gained += a.mp; spent += a.cost; }
-          }
-          const reached = currentMP + gained;
-          const reachedTarget = gained >= needed;
-          // Find next milestones
-          const nextMilestones = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= reached);
-          const stillNeeded    = MP_MILESTONES.filter(m => m.mp > reached).slice(0, 3);
+        let rem = budget, gained = 0, spent = 0;
+        const bought = [];
+        const needMP = targetMP ? targetMP - currentMP : Infinity;
 
-          const byCat = {};
-          bought.forEach(a => { if (!byCat[a.cat]) byCat[a.cat] = []; byCat[a.cat].push(a); });
-
-          const embed = new EmbedBuilder()
-            .setTitle('💍 Accessories — Target MP Plan')
-            .setColor(reachedTarget ? 0x00FF88 : 0xFFAA00)
-            .setDescription(
-              '**Budget:** '+fmt(budget)+' | **Goal:** '+goal+'\n'+
-              '**Current MP:** '+currentMP+' → **Target MP:** '+(targetMP||'none')+'\n\n'+
-              (reachedTarget
-                ? '✅ **Target reached!** You gain **+'+gained+' MP** (total: **'+reached+' MP**)\n💰 Cost: **'+fmt(spent)+'** | Remaining: **'+fmt(rem)+'**'
-                : '⚠️ Cannot fully reach **'+targetMP+' MP** within budget.\nGained: **+'+gained+' MP** (total: **'+reached+' MP**)\n💰 Cost: **'+fmt(spent)+'** | Remaining: **'+fmt(rem)+'**'
-              )
-            );
-
-          if (nextMilestones.length) {
-            embed.addFields({ name:'🎉 Milestones You\'ll Hit', value: nextMilestones.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
-          }
-          if (stillNeeded.length) {
-            embed.addFields({ name:'🎯 Next Milestones After That', value: stillNeeded.map(m=>'**'+m.mp+' MP** (+'+( m.mp - reached)+' more needed) — '+m.bonus).join('\n'), inline:false });
-          }
-
-          Object.entries(byCat).slice(0, 4).forEach(([cat, items]) => {
-            const lines = items.slice(0, 5).map(a => '• **'+a.name+'** — '+fmt(a.cost)+' (+'+a.mp+' MP)').join('\n');
-            embed.addFields({ name: cat+' ('+items.length+')', value: lines+(items.length>5?'\n_+' +(items.length-5)+' more_':''), inline:false });
-          });
-
-          embed.addFields({ name:'💡 Tips', value:'• Reforge: Warped Stone = best MP bonus\n• Recombobulate Legendary accessories\n• MP milestones: use `/accessories milestones` to see all', inline:false }).setTimestamp();
-          return interaction.editReply({ embeds:[embed] });
+        for (const a of sortedAcc) {
+          if (targetMP && gained >= needMP) break;
+          if (rem >= a.cost) { bought.push(a); rem -= a.cost; gained += a.mp; spent += a.cost; }
         }
 
-        // No target MP — regular budget plan
-        const sorted = sortedAcc
-          .map(a => ({ ...a, pri: wanted.includes(a.cat) ? 1 : 2, mppc: a.mp / a.cost }))
-          .sort((a, b) => a.pri - b.pri || b.mppc - a.mppc);
-        let rem = budget, totalMP = 0, spent = 0;
-        const bought = [];
-        for (const a of sorted) { if (rem >= a.cost) { bought.push(a); rem -= a.cost; totalMP += a.mp; spent += a.cost; } }
-        if (!bought.length) return interaction.editReply('Budget of **'+fmt(budget)+'** is too low. Cheapest is ~1,000 coins.');
+        if (!bought.length) return interaction.editReply('Budget of **'+fmt(budget)+'** is too low. Cheapest accessory is ~1,000 coins.');
+
+        const reached = currentMP + gained;
+        const reachedTarget = targetMP ? gained >= needMP : true;
+        const hittable = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= reached);
+        const nextMs   = MP_MILESTONES.filter(m => m.mp > reached).slice(0, 3);
 
         const byCat = {};
         bought.forEach(a => { if (!byCat[a.cat]) byCat[a.cat] = []; byCat[a.cat].push(a); });
 
-        const totalReached = currentMP + totalMP;
-        const hittableMilestones = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= totalReached);
-        const nextMilestones = MP_MILESTONES.filter(m => m.mp > totalReached).slice(0, 3);
-
         const embed = new EmbedBuilder()
-          .setTitle('💍 Accessories Budget Plan')
-          .setColor(0xFFD700)
+          .setTitle('Accessories Budget Plan').setColor(reachedTarget ? 0x00FF88 : 0xFFAA00)
           .setDescription(
-            '**Budget:** '+fmt(budget)+' | **Goal:** '+goal+' | **Tier limit:** '+tierLimit+'\n\n'+
-            '✅ Buy **'+bought.length+'** accessories for **'+fmt(spent)+'**\n'+
-            '✨ Magic Power gain: **+'+totalMP+' MP**'+(currentMP?' ('+currentMP+' → **'+totalReached+' MP**':''+')')+'\n'+
-            '💰 Remaining: **'+fmt(rem)+'**'
+            '**Budget:** '+fmt(budget)+' | **Goal:** '+goal+(targetMP?' | **Target:** '+targetMP+' MP':'')+'\n\n'+
+            '✅ Buy **'+bought.length+'** accessories — **'+fmt(spent)+'** coins\n'+
+            '✨ MP gain: **+'+gained+'**'+(currentMP?' ('+currentMP+' → **'+reached+'**)':'')+'\n'+
+            '💰 Remaining: **'+fmt(rem)+'**'+
+            (targetMP && !reachedTarget ? '\n⚠️ Could not fully reach **'+targetMP+' MP** within budget' : '')
           );
 
-        if (hittableMilestones.length) {
-          embed.addFields({ name:'🎉 Milestones You\'ll Hit', value: hittableMilestones.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
-        }
-        if (nextMilestones.length) {
-          embed.addFields({ name:'🎯 Next Milestones After Budget', value: nextMilestones.map(m=>'**'+m.mp+' MP** (need +' +(m.mp-totalReached)+' more MP) — '+m.bonus).join('\n'), inline:false });
-        }
+        if (hittable.length) embed.addFields({ name:'🎉 Milestones Unlocked', value: hittable.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
+        if (nextMs.length)   embed.addFields({ name:'🎯 Next Milestones', value: nextMs.map(m=>'**'+m.mp+' MP** (need +'+(m.mp-reached)+' more) — '+m.bonus).join('\n'), inline:false });
 
-        Object.entries(byCat).slice(0, 4).forEach(([cat, items]) => {
+        const catEntries = Object.entries(byCat).slice(0, 4);
+        catEntries.forEach(([cat, items]) => {
           const lines = items.slice(0, 5).map(a => '• **'+a.name+'** — '+fmt(a.cost)+' (+'+a.mp+' MP)').join('\n');
-          embed.addFields({ name: cat+' ('+items.length+')', value: lines+(items.length>5?'\n_+' +(items.length-5)+' more_':''), inline:false });
+          embed.addFields({ name: cat+' ('+items.length+')', value: lines + (items.length > 5 ? '\n_+' + (items.length-5) + ' more_' : ''), inline: false });
         });
 
-        embed.addFields({ name:'💡 Tips', value:'• Reforge: Itchy=Crit, Warped Stone=best MP\n• Recombobulate Legendary accessories\n• Use `/accessories milestones` to see all MP bonuses', inline:false }).setTimestamp();
+        embed.addFields({ name:'Tips', value:'• Reforge Warped Stone = best MP bonus\n• Recombobulate Legendary accessories\n• Use `/accessories milestones` to see all MP bonuses', inline:false }).setTimestamp();
         return interaction.editReply({ embeds:[embed] });
       }
 
-      // ── milestones ─────────────────────────────────────────────────────────
       if (sub === 'milestones') {
-        const lines = MP_MILESTONES.map(m => '**'+m.mp+' MP** — '+m.bonus);
-        const totalACC = ACC.reduce((s, a) => s + a.mp, 0);
+        const total = ACC.reduce((s,a) => s+a.mp, 0);
         return interaction.editReply({ embeds:[new EmbedBuilder()
-          .setTitle('✨ Magic Power Milestones')
-          .setColor(0xFFAA00)
-          .setDescription(
-            'Each milestone unlocks permanent bonus stats.\n'+
-            'Max possible MP from all accessories: **'+totalACC+' MP**\n\n'+
-            lines.join('\n')
-          )
-          .addFields({ name:'How to gain MP fast', value:'• Buy more accessories (each one adds MP)\n• Reforge with **Warped Stone** for extra MP\n• Recombobulate Legendary accessories for +1 MP bonus\n• Use `/accessories budget` to plan your upgrades', inline:false })
+          .setTitle('✨ Magic Power Milestones').setColor(0xFFAA00)
+          .setDescription('Each milestone gives permanent bonus stats.\nMax possible MP from all accessories: **'+total+' MP**\n\n'+MP_MILESTONES.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'))
+          .addFields({ name:'How to gain MP fast', value:'• Buy more accessories (each adds MP)\n• Reforge **Warped Stone** for extra MP bonus\n• Recombobulate Legendary accessories\n• Use `/accessories budget` to plan upgrades', inline:false })
           .setTimestamp()] });
       }
 
-      // ── list ───────────────────────────────────────────────────────────────
       if (sub === 'list') {
         const cat = interaction.options.getString('category');
-        const filtered = cat ? ACC.filter(a => a.cat === cat) : ACC.slice(0, 25);
-        if (!filtered.length) return interaction.editReply('No accessories found for that category.');
+        const filtered = cat ? ACC.filter(a => a.cat === cat) : ACC.slice(0, 30);
+        if (!filtered.length) return interaction.editReply('No accessories found.');
         const grouped = {};
-        filtered.forEach(a => { if (!grouped[a.tier]) grouped[a.tier] = []; grouped[a.tier].push(a); });
-        const embed = new EmbedBuilder().setTitle('💍 Accessories — '+(cat||'All')).setColor(0x00FFFF).setTimestamp();
+        filtered.forEach(a => { if (!grouped[a.tier]) grouped[a.tier]=[]; grouped[a.tier].push(a); });
+        const embed = new EmbedBuilder().setTitle('Accessories — '+(cat||'All')).setColor(0x00FFFF).setTimestamp();
         ['Common','Uncommon','Rare','Epic','Legendary'].forEach(tier => {
           if (!grouped[tier]) return;
-          const lines = grouped[tier].map(a => '• **'+a.name+'** — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
-          embed.addFields({ name: tier+' ('+grouped[tier].length+')', value: lines.slice(0, 1000), inline:false });
+          const lines = grouped[tier].map(a=>'• **'+a.name+'** — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
+          if (lines.length > 0) embed.addFields({ name: tier+' ('+grouped[tier].length+')', value: lines.slice(0,1000), inline:false });
         });
         return interaction.editReply({ embeds:[embed] });
       }
 
-      // ── upgrade ────────────────────────────────────────────────────────────
       if (sub === 'upgrade') {
         const budget    = interaction.options.getInteger('budget');
         const currentMP = interaction.options.getInteger('current_mp') || 0;
-        const sorted    = [...ACC].sort((a, b) => b.mp/b.cost - a.mp/a.cost);
+        const sorted    = [...ACC].sort((a,b) => b.mp/b.cost - a.mp/a.cost);
         let rem = budget, totalMP = 0;
         const bought = [];
         for (const a of sorted) { if (rem >= a.cost) { bought.push(a); rem -= a.cost; totalMP += a.mp; } }
-
-        const totalReached = currentMP + totalMP;
-        const hittable = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= totalReached);
-        const next     = MP_MILESTONES.filter(m => m.mp > totalReached).slice(0, 3);
-
-        const lines = bought.slice(0, 15).map((a, i) => (i+1)+'. **'+a.name+'** ['+a.tier+'] — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
+        const reached  = currentMP + totalMP;
+        const hittable = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= reached);
+        const next     = MP_MILESTONES.filter(m => m.mp > reached).slice(0, 3);
+        const lines    = bought.slice(0,12).map((a,i)=>(i+1)+'. **'+a.name+'** ['+a.tier+'] — '+fmt(a.cost)+' | +'+a.mp+' MP').join('\n');
 
         const embed = new EmbedBuilder()
-          .setTitle('⚡ Best MP/Coin Accessories for '+fmt(budget))
-          .setColor(0xAA00FF)
-          .setDescription(
-            '✨ Total MP gain: **+'+totalMP+' MP**'+(currentMP?' ('+currentMP+' → **'+totalReached+'**)':'')+'\n'+
-            '💰 Spent: **'+fmt(budget-rem)+'** | Remaining: **'+fmt(rem)+'**\n'+
-            '📦 Accessories: **'+bought.length+'**'
-          )
-          .addFields({ name:'Top Picks (best MP per coin)', value:lines||'None found', inline:false });
+          .setTitle('Best MP/Coin Picks for '+fmt(budget)).setColor(0xAA00FF)
+          .setDescription('✨ Total MP: **+'+totalMP+'**'+(currentMP?' ('+currentMP+' → **'+reached+'**)':'')+'\n💰 Spent: **'+fmt(budget-rem)+'** | Left: **'+fmt(rem)+'**\n📦 **'+bought.length+'** accessories')
+          .addFields({ name:'Top Picks', value: lines || 'None found', inline:false });
 
-        if (hittable.length) {
-          embed.addFields({ name:'🎉 Milestones You\'ll Hit', value: hittable.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
-        }
-        if (next.length) {
-          embed.addFields({ name:'🎯 Next Milestones', value: next.map(m=>'**'+m.mp+' MP** (need +' +(m.mp-totalReached)+' more MP) — '+m.bonus).join('\n'), inline:false });
-        }
+        if (hittable.length) embed.addFields({ name:'🎉 Milestones Unlocked', value: hittable.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
+        if (next.length)     embed.addFields({ name:'🎯 Next Milestones', value: next.map(m=>'**'+m.mp+' MP** (need +'+(m.mp-reached)+' more) — '+m.bonus).join('\n'), inline:false });
 
-        embed.addFields({ name:'💡 Remember', value:'• Recombobulate Legendary for extra MP\n• Warped Stone = best MP reforge\n• Use `/accessories budget <coins> <goal>` for goal-focused plan', inline:false }).setTimestamp();
+        embed.addFields({ name:'Tips', value:'• Warped Stone reforge = best MP\n• Recombobulate Legendary for extra MP\n• `/accessories budget <coins> <goal>` for goal-based plan', inline:false }).setTimestamp();
         return interaction.editReply({ embeds:[embed] });
       }
     }
 
-    // ── /kuudra ───────────────────────────────────────────────────────────────
+    // /kuudra
     if (cmd === 'kuudra') {
 
       if (sub === 'setup') {
@@ -779,14 +769,14 @@ client.on('interactionCreate', async interaction => {
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle('Kuudra '+d.label+' — Setup').setColor(d.color)
           .addFields(
-            { name:'Armor',          value:d.setup.armor,         inline:false },
-            { name:'Weapon',         value:d.setup.weapon,        inline:false },
-            { name:'Pet',            value:d.setup.pet,           inline:true  },
-            { name:'Accessories',    value:d.setup.acc,           inline:false },
-            { name:'Reforges',       value:d.setup.reforge,       inline:false },
-            { name:'Min EHP',        value:fmt(d.minEHP),         inline:true  },
-            { name:'Rec Cata Level', value:'Level '+d.recCata+'+', inline:true },
-            { name:'Notes',          value:d.setup.notes,         inline:false },
+            { name:'Armor',         value:d.setup.armor,        inline:false },
+            { name:'Weapon',        value:d.setup.weapon,       inline:false },
+            { name:'Pet',           value:d.setup.pet,          inline:true  },
+            { name:'Accessories',   value:d.setup.acc,          inline:false },
+            { name:'Reforges',      value:d.setup.reforge,      inline:false },
+            { name:'Min EHP',       value:fmt(d.minEHP),        inline:true  },
+            { name:'Rec Cata',      value:'Level '+d.recCata+'+',inline:true },
+            { name:'Notes',         value:d.setup.notes,        inline:false },
           ).setTimestamp()] });
       }
 
@@ -807,25 +797,25 @@ client.on('interactionCreate', async interaction => {
       }
 
       if (sub === 'requirements') {
-        const tier    = interaction.options.getString('tier');
-        const d       = TIERS[tier];
+        const tier     = interaction.options.getString('tier');
+        const d        = TIERS[tier];
         const username = await resolveUser(interaction);
-        const mojang  = await fetchMojang(username);
-        const member  = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
+        const mojang   = await fetchMojang(username);
+        const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
         if (!member) return interaction.editReply('No Skyblock data found.');
         const hp=member.stats?.health||100, def=member.stats?.defense||0, ehp=Math.round(hp*(1+def/100));
         const cata=dungLvl(member.dungeons?.dungeon_types?.catacombs?.experience||0);
         const avg=skillAvg(member);
         const ok1=ehp>=d.minEHP, ok2=cata>=d.recCata, ok3=avg>=30, all=ok1&&ok2&&ok3;
-        const t = v => v ? '✅ YES' : '❌ NO';
+        const t=v=>v?'✅ YES':'❌ NO';
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle(mojang.name+' — '+d.label+' Readiness').setColor(all?0x00FF44:0xFF4400)
           .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
           .addFields(
             { name:'EHP (est.) — '+t(ok1),   value:fmt(ehp)+' / '+fmt(d.minEHP)+' required', inline:false },
             { name:'Catacombs — '+t(ok2),     value:cata+' / '+d.recCata+' recommended',       inline:true  },
-            { name:'Skill Average — '+t(ok3), value:avg.toFixed(1)+' / 30 recommended',        inline:true  },
-            { name:'Verdict', value:all?'✅ **READY for '+d.label+'!**':'❌ Not fully ready. Improve stats marked NO.', inline:false },
+            { name:'Skill Avg — '+t(ok3),     value:avg.toFixed(1)+' / 30 recommended',        inline:true  },
+            { name:'Verdict', value:all?'✅ **READY for '+d.label+'!**':'❌ Not ready. Improve stats marked NO.', inline:false },
           ).setTimestamp()] });
       }
 
@@ -835,7 +825,7 @@ client.on('interactionCreate', async interaction => {
         if (!lfgStore.has(gid)) lfgStore.set(gid,[]);
         const list=lfgStore.get(gid).filter(e=>e.userId!==interaction.user.id);
         list.push({ userId:interaction.user.id, tag:interaction.user.tag, tier, role, note, ts:Date.now() });
-        lfgStore.set(gid, list);
+        lfgStore.set(gid,list);
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle('LFG — Kuudra '+d.label).setColor(d.color)
           .setDescription('<@'+interaction.user.id+'> is looking for a Kuudra group!')
@@ -843,16 +833,16 @@ client.on('interactionCreate', async interaction => {
             { name:'Role', value:role,    inline:true },
             { name:'Tier', value:d.label, inline:true },
             { name:'Note', value:note,    inline:false },
-          ).setFooter({ text:'Use /kuudra parties to list all. Expires in 30 min.' }).setTimestamp()] });
+          ).setFooter({ text:'Use /kuudra parties to list all. Expires 30 min.' }).setTimestamp()] });
       }
 
       if (sub === 'parties') {
         const tf=interaction.options.getString('tier')||'all', gid=interaction.guildId, now=Date.now();
         const fresh=(lfgStore.get(gid)||[]).filter(e=>now-e.ts<30*60000);
-        lfgStore.set(gid, fresh);
+        lfgStore.set(gid,fresh);
         const filtered=tf==='all'?fresh:fresh.filter(e=>e.tier===tf);
         if (!filtered.length) return interaction.editReply('No active LFG parties. Post one with `/kuudra lfg`!');
-        const embed=new EmbedBuilder().setTitle('Active LFG'+(tf!=='all'?' — '+TIERS[tf].label:' — All Tiers')).setColor(0xFF6600).setTimestamp();
+        const embed=new EmbedBuilder().setTitle('Active LFG'+(tf!=='all'?' — '+TIERS[tf].label:' — All')).setColor(0xFF6600).setTimestamp();
         filtered.slice(0,10).forEach(e=>embed.addFields({ name:TIERS[e.tier].label+' — '+e.role, value:'<@'+e.userId+'> ('+e.tag+')\n'+e.note+'\n'+Math.round((now-e.ts)/60000)+'m ago', inline:false }));
         return interaction.editReply({ embeds:[embed] });
       }
@@ -861,9 +851,7 @@ client.on('interactionCreate', async interaction => {
         const tier=interaction.options.getString('tier');
         if (tier) {
           const d=TIERS[tier];
-          return interaction.editReply({ embeds:[new EmbedBuilder()
-            .setTitle('Kuudra '+d.label+' — Guide').setColor(d.color)
-            .setDescription(d.guide.join('\n\n')).setTimestamp()] });
+          return interaction.editReply({ embeds:[new EmbedBuilder().setTitle('Kuudra '+d.label+' — Guide').setColor(d.color).setDescription(d.guide.join('\n\n')).setTimestamp()] });
         }
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle('Kuudra — General Guide').setColor(0xFF6600)
@@ -871,20 +859,20 @@ client.on('interactionCreate', async interaction => {
             { name:'Overview', value:'4-player co-op boss on Crimson Isle. 5 tiers: Basic to Infernal.', inline:false },
             { name:'Roles',    value:'Mage — Staff DPS\nBerserk — Melee\nArcher — Ranged\nTank — Absorption\nHealer — Support', inline:false },
             { name:'4 Phases', value:'1. Supply Run\n2. Build + Defend\n3. Ballista + Fight Kuudra\n4. Open Paid Chest', inline:false },
-            { name:'Pro Tips', value:'Always open Paid Chest | Attribute Shards are best drops\nUse God Pots for Fiery+ | Coordinate roles before starting', inline:false },
+            { name:'Pro Tips', value:'Always open Paid Chest | Attribute Shards best drops\nGod Pots for Fiery+ | Coordinate roles', inline:false },
           ).setTimestamp()] });
       }
 
       if (sub === 'tiers') {
-        const embed=new EmbedBuilder().setTitle('Kuudra — All Tiers Overview').setColor(0xFF6600).setTimestamp();
-        Object.entries(TIERS).forEach(([k,d])=>embed.addFields({ name:d.label, value:'Avg Profit: **'+fmt(d.profit.avgLoot-d.profit.keyCost)+'**/run | Min EHP: **'+fmt(d.minEHP)+'** | Rec Cata: **'+d.recCata+'+**', inline:false }));
+        const embed=new EmbedBuilder().setTitle('Kuudra — All Tiers').setColor(0xFF6600).setTimestamp();
+        Object.entries(TIERS).forEach(([k,d])=>embed.addFields({ name:d.label, value:'Profit: **'+fmt(d.profit.avgLoot-d.profit.keyCost)+'**/run | Min EHP: **'+fmt(d.minEHP)+'** | Cata: **'+d.recCata+'+**', inline:false }));
         return interaction.editReply({ embeds:[embed] });
       }
     }
 
-  } catch (err) {
+  } catch(err) {
     console.error('Error:', err.message);
-    try { await interaction.editReply('❌ ' + (err.message || 'Unknown error')); } catch(_) {}
+    try { await interaction.editReply('❌ '+( err.message||'Unknown error')); } catch(_){}
   }
 });
 
