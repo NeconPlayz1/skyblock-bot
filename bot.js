@@ -16,7 +16,7 @@ const linkedAccounts = new Map();
 
 const HAPI = () => ({ headers: { 'API-Key': HYPIXEL_API_KEY } });
 
-// ─── API ─────────────────────────────────────────────────────────────────────
+// ─── API (v2 URLs) ────────────────────────────────────────────────────────────
 
 async function fetchMojang(username) {
   const k = 'mj_' + username.toLowerCase();
@@ -30,30 +30,30 @@ async function fetchMojang(username) {
 async function fetchProfiles(uuid) {
   const k = 'pr_' + uuid;
   if (cache.has(k)) return cache.get(k);
-  const r = await axios.get('https://api.hypixel.net/skyblock/profiles?uuid=' + uuid, HAPI());
+  const r = await axios.get('https://api.hypixel.net/v2/skyblock/profiles?uuid=' + uuid, HAPI());
   const v = r.data.profiles || [];
   cache.set(k, v); return v;
 }
 
 async function fetchBazaar() {
   if (cache.has('bz')) return cache.get('bz');
-  const r = await axios.get('https://api.hypixel.net/skyblock/bazaar', HAPI());
+  const r = await axios.get('https://api.hypixel.net/v2/skyblock/bazaar', HAPI());
   const v = r.data.products || {};
   cache.set('bz', v); return v;
 }
 
 async function fetchAH() {
-  const r = await axios.get('https://api.hypixel.net/skyblock/auctions?page=0', HAPI());
+  const r = await axios.get('https://api.hypixel.net/v2/skyblock/auctions?page=0', HAPI());
   return r.data;
 }
 
 async function fetchMayor() {
   if (cache.has('mayor')) return cache.get('mayor');
-  const r = await axios.get('https://api.hypixel.net/resources/skyblock/election', HAPI());
+  const r = await axios.get('https://api.hypixel.net/v2/resources/skyblock/election', HAPI());
   cache.set('mayor', r.data); return r.data;
 }
 
-function getActive(profiles, uuid) {
+function getActive(profiles) {
   if (!profiles || !profiles.length) return null;
   return profiles.find(p => p.selected) || profiles[0];
 }
@@ -68,7 +68,7 @@ async function resolveUser(interaction) {
   throw new Error('No username provided. Use `/link <username>` first, or provide a username.');
 }
 
-// ─── MATH ────────────────────────────────────────────────────────────────────
+// ─── FORMAT ───────────────────────────────────────────────────────────────────
 
 function fmt(n) {
   if (!n || isNaN(n)) return '0';
@@ -78,10 +78,12 @@ function fmt(n) {
   return Math.round(n).toLocaleString();
 }
 
+// ─── SKILL XP ────────────────────────────────────────────────────────────────
+
 const SKILL_XP = [0,50,125,200,300,500,750,1000,1500,2000,3500,5000,7500,10000,15000,20000,30000,50000,75000,100000,200000,300000,400000,500000,600000,700000,800000,900000,1000000,1100000,1200000,1300000,1400000,1500000,1600000,1700000,1800000,1900000,2000000,2100000,2200000,2300000,2400000,2500000,2600000,2750000,2900000,3100000,3400000,3700000,4000000,4300000,4600000,5000000,5500000,6000000,6500000,7000000,7500000];
 function skillLevel(xp, max) {
   max = max||60; let lvl=0,tot=0;
-  for (let i=0;i<Math.min(max,SKILL_XP.length);i++) { if (xp>=tot+SKILL_XP[i]){tot+=SKILL_XP[i];lvl=i;}else break; }
+  for (let i=0;i<Math.min(max,SKILL_XP.length);i++){if(xp>=tot+SKILL_XP[i]){tot+=SKILL_XP[i];lvl=i;}else break;}
   return lvl;
 }
 function skillAvg(m) {
@@ -89,77 +91,113 @@ function skillAvg(m) {
   return n.reduce((s,k)=>s+skillLevel(m['experience_skill_'+k]||0),0)/n.length;
 }
 
-const SL_XP = { zombie:[0,5,15,200,1000,5000,20000,100000,400000,1000000], spider:[0,5,25,200,1000,5000,20000,100000,400000,1000000], wolf:[0,10,30,250,1500,5000,20000,100000,400000,1000000], enderman:[0,10,30,250,1500,5000,20000,100000,400000,1000000], blaze:[0,10,30,250,1500,5000,20000,100000,400000,1000000], vampire:[0,20,75,240,840,2400] };
-function slayerLvl(xp,type) { const t=SL_XP[type]||[]; let l=0; for(let i=0;i<t.length;i++){if(xp>=t[i])l=i;else break;} return l; }
+const SL_XP = {
+  zombie:[0,5,15,200,1000,5000,20000,100000,400000,1000000],
+  spider:[0,5,25,200,1000,5000,20000,100000,400000,1000000],
+  wolf:[0,10,30,250,1500,5000,20000,100000,400000,1000000],
+  enderman:[0,10,30,250,1500,5000,20000,100000,400000,1000000],
+  blaze:[0,10,30,250,1500,5000,20000,100000,400000,1000000],
+  vampire:[0,20,75,240,840,2400],
+};
+function slayerLvl(xp,type){const t=SL_XP[type]||[];let l=0;for(let i=0;i<t.length;i++){if(xp>=t[i])l=i;else break;}return l;}
 
-const DG_XP = [0,50,75,110,160,230,330,470,670,950,1340,1890,2665,3760,5260,7380,10300,14400,20000,27600,38000,52500,71500,97000,132000,180000,243000,328000,445000,600000,800000,1065000,1410000,1900000,2500000,3300000,4300000,5600000,7200000,9200000,12000000,15000000,19000000,24000000,30000000,38000000,48000000,60000000,75000000,93000000];
-function dungLvl(xp) { let l=0,tot=0; for(let i=0;i<DG_XP.length;i++){if(xp>=tot+DG_XP[i]){tot+=DG_XP[i];l=i;}else break;} return l; }
+const DG_XP=[0,50,75,110,160,230,330,470,670,950,1340,1890,2665,3760,5260,7380,10300,14400,20000,27600,38000,52500,71500,97000,132000,180000,243000,328000,445000,600000,800000,1065000,1410000,1900000,2500000,3300000,4300000,5600000,7200000,9200000,12000000,15000000,19000000,24000000,30000000,38000000,48000000,60000000,75000000,93000000];
+function dungLvl(xp){let l=0,tot=0;for(let i=0;i<DG_XP.length;i++){if(xp>=tot+DG_XP[i]){tot+=DG_XP[i];l=i;}else break;}return l;}
 
 // ─── ACCESSORIES DATA ────────────────────────────────────────────────────────
+// MP milestones that unlock bonus stats
+const MP_MILESTONES = [
+  { mp: 100,  bonus: '+5 Strength, +5 Crit Damage'         },
+  { mp: 150,  bonus: '+1% Crit Chance'                      },
+  { mp: 200,  bonus: '+5 Intelligence, +5 Defense'          },
+  { mp: 250,  bonus: '+1% Crit Chance'                      },
+  { mp: 300,  bonus: '+5 Strength, +5 Crit Damage'         },
+  { mp: 400,  bonus: '+5 Speed, +5 Crit Chance'             },
+  { mp: 500,  bonus: '+10 Strength, +10 Crit Damage'        },
+  { mp: 650,  bonus: '+5 Speed, +5 Crit Chance'             },
+  { mp: 800,  bonus: '+10 Intelligence, +10 Defense'        },
+  { mp: 900,  bonus: '+5 Strength, +5 Crit Damage'         },
+  { mp: 1000, bonus: '+10 Strength, +15 Crit Damage, +2% CC'},
+];
 
 const ACC = [
-  { name:'Speed Talisman',          tier:'Common',    mp:3,  cost:2000,     cat:'Speed',    desc:'+1% Speed' },
-  { name:'Speed Ring',              tier:'Uncommon',  mp:5,  cost:5000,     cat:'Speed',    desc:'+2% Speed' },
-  { name:'Speed Artifact',          tier:'Rare',      mp:8,  cost:25000,    cat:'Speed',    desc:'+3% Speed' },
-  { name:'Candy Talisman',          tier:'Common',    mp:3,  cost:1000,     cat:'Utility',  desc:'+1 Strength' },
-  { name:'Potion Affinity Talisman',tier:'Common',    mp:3,  cost:3000,     cat:'Utility',  desc:'Potions last longer' },
-  { name:'Feather Talisman',        tier:'Common',    mp:3,  cost:2500,     cat:'Defense',  desc:'Reduce fall damage' },
-  { name:'Feather Ring',            tier:'Uncommon',  mp:5,  cost:8000,     cat:'Defense',  desc:'Negate fall damage' },
-  { name:'Feather Artifact',        tier:'Rare',      mp:8,  cost:40000,    cat:'Defense',  desc:'Immunity to fall damage' },
-  { name:'Intimidation Talisman',   tier:'Common',    mp:3,  cost:4000,     cat:'Combat',   desc:'Weaker mobs less likely to attack' },
-  { name:'Intimidation Ring',       tier:'Uncommon',  mp:5,  cost:15000,    cat:'Combat',   desc:'Mobs less likely to attack' },
-  { name:'Intimidation Artifact',   tier:'Epic',      mp:12, cost:200000,   cat:'Combat',   desc:'Strong mobs less likely to attack' },
-  { name:'Zombie Talisman',         tier:'Common',    mp:3,  cost:5000,     cat:'Combat',   desc:'+2 Strength vs Zombies' },
-  { name:'Zombie Ring',             tier:'Uncommon',  mp:5,  cost:20000,    cat:'Combat',   desc:'+4 Strength vs Zombies' },
-  { name:'Zombie Artifact',         tier:'Rare',      mp:8,  cost:80000,    cat:'Combat',   desc:'+6 Strength vs Zombies' },
-  { name:'Spider Talisman',         tier:'Uncommon',  mp:5,  cost:10000,    cat:'Combat',   desc:'+2 Crit Damage vs Spiders' },
-  { name:'Spider Ring',             tier:'Rare',      mp:8,  cost:50000,    cat:'Combat',   desc:'+4 Crit Damage vs Spiders' },
-  { name:'Spider Artifact',         tier:'Epic',      mp:12, cost:250000,   cat:'Combat',   desc:'+6 Crit Damage vs Spiders' },
-  { name:'Wolf Talisman',           tier:'Uncommon',  mp:5,  cost:10000,    cat:'Combat',   desc:'+2 Speed on Slayer quests' },
-  { name:'Wolf Ring',               tier:'Rare',      mp:8,  cost:50000,    cat:'Combat',   desc:'+4 Speed on Slayer quests' },
-  { name:'Bat Talisman',            tier:'Common',    mp:3,  cost:1500,     cat:'Utility',  desc:'Attracts nearby bats' },
-  { name:'Bat Ring',                tier:'Uncommon',  mp:5,  cost:8000,     cat:'Utility',  desc:'Stronger bat attraction' },
-  { name:'Bat Artifact',            tier:'Rare',      mp:8,  cost:40000,    cat:'Utility',  desc:'Area bat attraction' },
-  { name:'Broken Piggy Bank',       tier:'Common',    mp:3,  cost:5000,     cat:'Utility',  desc:'Saves coins on death' },
-  { name:'Cracked Piggy Bank',      tier:'Uncommon',  mp:5,  cost:20000,    cat:'Utility',  desc:'Saves more coins on death' },
-  { name:'Piggy Bank',              tier:'Rare',      mp:8,  cost:100000,   cat:'Utility',  desc:'Saves most coins on death' },
-  { name:'Magnetic Talisman',       tier:'Common',    mp:3,  cost:3000,     cat:'Utility',  desc:'Increased pickup range' },
-  { name:'Vaccine Talisman',        tier:'Common',    mp:3,  cost:4000,     cat:'Utility',  desc:'Reduces poison duration' },
-  { name:'Farmer Orb',              tier:'Uncommon',  mp:5,  cost:50000,    cat:'Farming',  desc:'Crops grow faster' },
-  { name:'Mine Talisman',           tier:'Common',    mp:3,  cost:2000,     cat:'Mining',   desc:'Mining speed in mines' },
-  { name:'Mine Ring',               tier:'Uncommon',  mp:5,  cost:8000,     cat:'Mining',   desc:'+5 Mining Speed' },
-  { name:'Treasure Talisman',       tier:'Common',    mp:3,  cost:3000,     cat:'Fishing',  desc:'More fishing treasure' },
-  { name:'Fishing Talisman',        tier:'Uncommon',  mp:5,  cost:5000,     cat:'Fishing',  desc:'+10 Fishing Speed' },
-  { name:'Sea Creature Talisman',   tier:'Rare',      mp:8,  cost:30000,    cat:'Fishing',  desc:'Sea creature buffs' },
-  { name:'Talisman of Coins',       tier:'Uncommon',  mp:5,  cost:15000,    cat:'Utility',  desc:'Coins from mobs' },
-  { name:'Ender Artifact',          tier:'Epic',      mp:12, cost:300000,   cat:'Combat',   desc:'+25% damage on Endermen' },
-  { name:'Lava Talisman',           tier:'Uncommon',  mp:5,  cost:10000,    cat:'Utility',  desc:'Fire immunity' },
-  { name:'Ancient Rose',            tier:'Epic',      mp:12, cost:500000,   cat:'Combat',   desc:'+5% Magic damage' },
-  { name:'Campfire Talisman',       tier:'Common',    mp:3,  cost:2000,     cat:'Utility',  desc:'+1 Defense' },
-  { name:'Campfire Badge 5',        tier:'Uncommon',  mp:5,  cost:10000,    cat:'Utility',  desc:'+5 Defense' },
-  { name:'Campfire Badge 10',       tier:'Rare',      mp:8,  cost:50000,    cat:'Utility',  desc:'+10 Defense' },
-  { name:'Campfire Badge 15',       tier:'Epic',      mp:12, cost:200000,   cat:'Utility',  desc:'+15 Defense' },
-  { name:'Campfire Badge 20',       tier:'Legendary', mp:16, cost:1000000,  cat:'Utility',  desc:'+20 Defense' },
-  { name:'Wither Talisman',         tier:'Rare',      mp:8,  cost:75000,    cat:'Combat',   desc:'+5% damage vs Wither mobs' },
-  { name:'Wither Ring',             tier:'Epic',      mp:12, cost:400000,   cat:'Combat',   desc:'+10% damage vs Wither mobs' },
-  { name:'Wither Artifact',         tier:'Legendary', mp:16, cost:2000000,  cat:'Combat',   desc:'+15% damage vs Wither mobs' },
-  { name:'Crit Talisman',           tier:'Rare',      mp:8,  cost:50000,    cat:'Combat',   desc:'+10 Crit Damage' },
-  { name:'Crit Ring',               tier:'Epic',      mp:12, cost:250000,   cat:'Combat',   desc:'+15 Crit Damage' },
-  { name:'Crit Artifact',           tier:'Legendary', mp:16, cost:2500000,  cat:'Combat',   desc:'+25 Crit Damage' },
-  { name:'Haste Ring',              tier:'Common',    mp:3,  cost:5000,     cat:'Mining',   desc:'Haste I while mining' },
-  { name:'Night Vision Charm',      tier:'Common',    mp:3,  cost:3000,     cat:'Utility',  desc:'Night vision in caves' },
-  { name:'Experience Artifact',     tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'+25% XP from all sources' },
-  { name:'Scarf Thesis',            tier:'Legendary', mp:16, cost:10000000, cat:'Dungeons', desc:'+5% dmg and def in dungeons' },
-  { name:'Frozen Chicken',          tier:'Common',    mp:3,  cost:1000,     cat:'Utility',  desc:'Reduces ice damage' },
-  { name:'Shaman Orb',              tier:'Uncommon',  mp:5,  cost:30000,    cat:'Utility',  desc:'Golem buff nearby' },
-  { name:'Personal Deletor 4000',   tier:'Rare',      mp:8,  cost:200000,   cat:'Utility',  desc:'Auto-deletes junk items' },
-  { name:'Personal Deletor 5000',   tier:'Epic',      mp:12, cost:1000000,  cat:'Utility',  desc:'Auto-deletes more junk' },
-  { name:'Personal Deletor 6000',   tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'Auto-deletes most junk' },
-  { name:'Beacon 1',                tier:'Common',    mp:3,  cost:10000,    cat:'Utility',  desc:'+5 stats in beacon range' },
-  { name:'Beacon 2',                tier:'Uncommon',  mp:5,  cost:50000,    cat:'Utility',  desc:'+10 stats in beacon range' },
-  { name:'Beacon 3',                tier:'Rare',      mp:8,  cost:200000,   cat:'Utility',  desc:'+15 stats in beacon range' },
-  { name:'Beacon 4',                tier:'Epic',      mp:12, cost:1000000,  cat:'Utility',  desc:'+20 stats in beacon range' },
-  { name:'Beacon 5',                tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'+25 stats in beacon range' },
+  { name:'Speed Talisman',           tier:'Common',    mp:3,  cost:2000,     cat:'Speed',    desc:'+1% Speed' },
+  { name:'Speed Ring',               tier:'Uncommon',  mp:5,  cost:5000,     cat:'Speed',    desc:'+2% Speed' },
+  { name:'Speed Artifact',           tier:'Rare',      mp:8,  cost:25000,    cat:'Speed',    desc:'+3% Speed' },
+  { name:'Candy Talisman',           tier:'Common',    mp:3,  cost:1000,     cat:'Utility',  desc:'+1 Strength' },
+  { name:'Potion Affinity Talisman', tier:'Common',    mp:3,  cost:3000,     cat:'Utility',  desc:'Potions last longer' },
+  { name:'Feather Talisman',         tier:'Common',    mp:3,  cost:2500,     cat:'Defense',  desc:'Reduce fall damage' },
+  { name:'Feather Ring',             tier:'Uncommon',  mp:5,  cost:8000,     cat:'Defense',  desc:'Negate fall damage' },
+  { name:'Feather Artifact',         tier:'Rare',      mp:8,  cost:40000,    cat:'Defense',  desc:'Immunity to fall damage' },
+  { name:'Intimidation Talisman',    tier:'Common',    mp:3,  cost:4000,     cat:'Combat',   desc:'Weaker mobs less likely to attack' },
+  { name:'Intimidation Ring',        tier:'Uncommon',  mp:5,  cost:15000,    cat:'Combat',   desc:'Mobs less likely to attack' },
+  { name:'Intimidation Artifact',    tier:'Epic',      mp:12, cost:200000,   cat:'Combat',   desc:'Strong mobs less likely to attack' },
+  { name:'Zombie Talisman',          tier:'Common',    mp:3,  cost:5000,     cat:'Combat',   desc:'+2 Strength vs Zombies' },
+  { name:'Zombie Ring',              tier:'Uncommon',  mp:5,  cost:20000,    cat:'Combat',   desc:'+4 Strength vs Zombies' },
+  { name:'Zombie Artifact',          tier:'Rare',      mp:8,  cost:80000,    cat:'Combat',   desc:'+6 Strength vs Zombies' },
+  { name:'Spider Talisman',          tier:'Uncommon',  mp:5,  cost:10000,    cat:'Combat',   desc:'+2 Crit Damage vs Spiders' },
+  { name:'Spider Ring',              tier:'Rare',      mp:8,  cost:50000,    cat:'Combat',   desc:'+4 Crit Damage vs Spiders' },
+  { name:'Spider Artifact',          tier:'Epic',      mp:12, cost:250000,   cat:'Combat',   desc:'+6 Crit Damage vs Spiders' },
+  { name:'Wolf Talisman',            tier:'Uncommon',  mp:5,  cost:10000,    cat:'Combat',   desc:'+2 Speed on Slayer quests' },
+  { name:'Wolf Ring',                tier:'Rare',      mp:8,  cost:50000,    cat:'Combat',   desc:'+4 Speed on Slayer quests' },
+  { name:'Wolf Artifact',            tier:'Epic',      mp:12, cost:300000,   cat:'Combat',   desc:'+6 Speed on Slayer quests' },
+  { name:'Bat Talisman',             tier:'Common',    mp:3,  cost:1500,     cat:'Utility',  desc:'Attracts nearby bats' },
+  { name:'Bat Ring',                 tier:'Uncommon',  mp:5,  cost:8000,     cat:'Utility',  desc:'Stronger bat attraction' },
+  { name:'Bat Artifact',             tier:'Rare',      mp:8,  cost:40000,    cat:'Utility',  desc:'Area bat attraction' },
+  { name:'Broken Piggy Bank',        tier:'Common',    mp:3,  cost:5000,     cat:'Utility',  desc:'Saves coins on death' },
+  { name:'Cracked Piggy Bank',       tier:'Uncommon',  mp:5,  cost:20000,    cat:'Utility',  desc:'Saves more coins on death' },
+  { name:'Piggy Bank',               tier:'Rare',      mp:8,  cost:100000,   cat:'Utility',  desc:'Saves most coins on death' },
+  { name:'Magnetic Talisman',        tier:'Common',    mp:3,  cost:3000,     cat:'Utility',  desc:'Increased pickup range' },
+  { name:'Vaccine Talisman',         tier:'Common',    mp:3,  cost:4000,     cat:'Utility',  desc:'Reduces poison duration' },
+  { name:'Farmer Orb',               tier:'Uncommon',  mp:5,  cost:50000,    cat:'Farming',  desc:'Crops grow faster' },
+  { name:'Mine Talisman',            tier:'Common',    mp:3,  cost:2000,     cat:'Mining',   desc:'Mining speed in mines' },
+  { name:'Mine Ring',                tier:'Uncommon',  mp:5,  cost:8000,     cat:'Mining',   desc:'+5 Mining Speed' },
+  { name:'Treasure Talisman',        tier:'Common',    mp:3,  cost:3000,     cat:'Fishing',  desc:'More fishing treasure' },
+  { name:'Fishing Talisman',         tier:'Uncommon',  mp:5,  cost:5000,     cat:'Fishing',  desc:'+10 Fishing Speed' },
+  { name:'Sea Creature Talisman',    tier:'Rare',      mp:8,  cost:30000,    cat:'Fishing',  desc:'Sea creature buffs' },
+  { name:'Talisman of Coins',        tier:'Uncommon',  mp:5,  cost:15000,    cat:'Utility',  desc:'Coins from mobs' },
+  { name:'Ender Artifact',           tier:'Epic',      mp:12, cost:300000,   cat:'Combat',   desc:'+25% damage on Endermen' },
+  { name:'Lava Talisman',            tier:'Uncommon',  mp:5,  cost:10000,    cat:'Utility',  desc:'Fire immunity' },
+  { name:'Ancient Rose',             tier:'Epic',      mp:12, cost:500000,   cat:'Combat',   desc:'+5% Magic damage' },
+  { name:'Campfire Talisman',        tier:'Common',    mp:3,  cost:2000,     cat:'Utility',  desc:'+1 Defense' },
+  { name:'Campfire Badge 5',         tier:'Uncommon',  mp:5,  cost:10000,    cat:'Utility',  desc:'+5 Defense' },
+  { name:'Campfire Badge 10',        tier:'Rare',      mp:8,  cost:50000,    cat:'Utility',  desc:'+10 Defense' },
+  { name:'Campfire Badge 15',        tier:'Epic',      mp:12, cost:200000,   cat:'Utility',  desc:'+15 Defense' },
+  { name:'Campfire Badge 20',        tier:'Legendary', mp:16, cost:1000000,  cat:'Utility',  desc:'+20 Defense' },
+  { name:'Wither Talisman',          tier:'Rare',      mp:8,  cost:75000,    cat:'Combat',   desc:'+5% damage vs Wither mobs' },
+  { name:'Wither Ring',              tier:'Epic',      mp:12, cost:400000,   cat:'Combat',   desc:'+10% damage vs Wither mobs' },
+  { name:'Wither Artifact',          tier:'Legendary', mp:16, cost:2000000,  cat:'Combat',   desc:'+15% damage vs Wither mobs' },
+  { name:'Crit Talisman',            tier:'Rare',      mp:8,  cost:50000,    cat:'Combat',   desc:'+10 Crit Damage' },
+  { name:'Crit Ring',                tier:'Epic',      mp:12, cost:250000,   cat:'Combat',   desc:'+15 Crit Damage' },
+  { name:'Crit Artifact',            tier:'Legendary', mp:16, cost:2500000,  cat:'Combat',   desc:'+25 Crit Damage' },
+  { name:'Haste Ring',               tier:'Common',    mp:3,  cost:5000,     cat:'Mining',   desc:'Haste I while mining' },
+  { name:'Night Vision Charm',       tier:'Common',    mp:3,  cost:3000,     cat:'Utility',  desc:'Night vision in caves' },
+  { name:'Experience Artifact',      tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'+25% XP from all sources' },
+  { name:'Scarf Thesis',             tier:'Legendary', mp:16, cost:10000000, cat:'Dungeons', desc:'+5% dmg and def in dungeons' },
+  { name:'Frozen Chicken',           tier:'Common',    mp:3,  cost:1000,     cat:'Utility',  desc:'Reduces ice damage' },
+  { name:'Shaman Orb',               tier:'Uncommon',  mp:5,  cost:30000,    cat:'Utility',  desc:'Golem buff nearby' },
+  { name:'Personal Deletor 4000',    tier:'Rare',      mp:8,  cost:200000,   cat:'Utility',  desc:'Auto-deletes junk items' },
+  { name:'Personal Deletor 5000',    tier:'Epic',      mp:12, cost:1000000,  cat:'Utility',  desc:'Auto-deletes more junk' },
+  { name:'Personal Deletor 6000',    tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'Auto-deletes most junk' },
+  { name:'Beacon 1',                 tier:'Common',    mp:3,  cost:10000,    cat:'Utility',  desc:'+5 stats in beacon range' },
+  { name:'Beacon 2',                 tier:'Uncommon',  mp:5,  cost:50000,    cat:'Utility',  desc:'+10 stats in beacon range' },
+  { name:'Beacon 3',                 tier:'Rare',      mp:8,  cost:200000,   cat:'Utility',  desc:'+15 stats in beacon range' },
+  { name:'Beacon 4',                 tier:'Epic',      mp:12, cost:1000000,  cat:'Utility',  desc:'+20 stats in beacon range' },
+  { name:'Beacon 5',                 tier:'Legendary', mp:16, cost:5000000,  cat:'Utility',  desc:'+25 stats in beacon range' },
+  { name:'Jungle Key',               tier:'Rare',      mp:8,  cost:20000,    cat:'Utility',  desc:'Access jungle miniboss' },
+  { name:'Bait Ring',                tier:'Uncommon',  mp:5,  cost:8000,     cat:'Fishing',  desc:'+10% Sea Creature chance' },
+  { name:'Shark Scale Ring',         tier:'Rare',      mp:8,  cost:40000,    cat:'Fishing',  desc:'+15% Sea Creature chance' },
+  { name:'Shark Scale Artifact',     tier:'Epic',      mp:12, cost:200000,   cat:'Fishing',  desc:'+25% Sea Creature chance' },
+  { name:'Dante Talisman',           tier:'Uncommon',  mp:5,  cost:20000,    cat:'Combat',   desc:'+2% damage in The End' },
+  { name:'Dante Ring',               tier:'Rare',      mp:8,  cost:80000,    cat:'Combat',   desc:'+4% damage in The End' },
+  { name:'Dante Artifact',           tier:'Epic',      mp:12, cost:400000,   cat:'Combat',   desc:'+6% damage in The End' },
+  { name:'Crooked Artifact',         tier:'Legendary', mp:16, cost:3000000,  cat:'Combat',   desc:'+10% damage to all mobs' },
+  { name:'Titanium Talisman',        tier:'Uncommon',  mp:5,  cost:15000,    cat:'Mining',   desc:'+5 Mining Speed in Dwarven Mines' },
+  { name:'Titanium Ring',            tier:'Rare',      mp:8,  cost:60000,    cat:'Mining',   desc:'+10 Mining Speed in Dwarven Mines' },
+  { name:'Titanium Artifact',        tier:'Epic',      mp:12, cost:300000,   cat:'Mining',   desc:'+15 Mining Speed in Dwarven Mines' },
+  { name:'Treasure Hunter Talisman', tier:'Uncommon',  mp:5,  cost:10000,    cat:'Utility',  desc:'Extra loot from treasure chests' },
+  { name:'Treasure Hunter Ring',     tier:'Rare',      mp:8,  cost:50000,    cat:'Utility',  desc:'More extra loot' },
+  { name:'Treasure Hunter Artifact', tier:'Epic',      mp:12, cost:250000,   cat:'Utility',  desc:'Much more extra loot' },
 ];
 
 // ─── KUUDRA DATA ─────────────────────────────────────────────────────────────
@@ -187,28 +225,23 @@ const TIERS = {
     guide:['**Phase 1:** Perfect supply run, under 35s.','**Phase 2:** Extremely strong minions, coordinate roles.','**Phase 3:** Ballista 4+ hits. Constant AoE. Do NOT facetank.','**Phase 4:** Infernal chests drop 10M+ items.','**Tip:** Best-in-slot required. One weak player can wipe team.'] },
 };
 
-// ─── COMMANDS ────────────────────────────────────────────────────────────────
-// RULE: required options ALWAYS before optional options in every subcommand
+// ─── COMMANDS ─────────────────────────────────────────────────────────────────
 
 const TC = [
-  { name:'Basic (T1)',   value:'basic'    },
-  { name:'Hot (T2)',     value:'hot'      },
-  { name:'Burning (T3)',value:'burning'  },
-  { name:'Fiery (T4)',  value:'fiery'    },
-  { name:'Infernal (T5)',value:'infernal'},
+  { name:'Basic (T1)',    value:'basic'    },
+  { name:'Hot (T2)',      value:'hot'      },
+  { name:'Burning (T3)', value:'burning'  },
+  { name:'Fiery (T4)',   value:'fiery'    },
+  { name:'Infernal (T5)',value:'infernal' },
 ];
 
-// optional username helper
 const uOpt = o => o.setName('username').setDescription('Minecraft username (skip if account linked)').setRequired(false);
 
 const commands = [
-  // Link
   new SlashCommandBuilder().setName('link').setDescription('Link your Minecraft account to Discord')
     .addStringOption(o => o.setName('username').setDescription('Your Minecraft username').setRequired(true)),
   new SlashCommandBuilder().setName('unlink').setDescription('Unlink your Minecraft account'),
   new SlashCommandBuilder().setName('whoami').setDescription('Show your linked Minecraft account'),
-
-  // Stats (username optional — uses linked account)
   new SlashCommandBuilder().setName('stats').setDescription('View a player\'s Skyblock stats').addStringOption(uOpt),
   new SlashCommandBuilder().setName('networth').setDescription('Check a player\'s coin networth').addStringOption(uOpt),
   new SlashCommandBuilder().setName('skills').setDescription('View a player\'s skill levels').addStringOption(uOpt),
@@ -218,8 +251,6 @@ const commands = [
   new SlashCommandBuilder().setName('compare').setDescription('Compare two players\' stats')
     .addStringOption(o => o.setName('player1').setDescription('First player').setRequired(true))
     .addStringOption(o => o.setName('player2').setDescription('Second player').setRequired(true)),
-
-  // Economy
   new SlashCommandBuilder().setName('bazaar').setDescription('Check Bazaar prices')
     .addStringOption(o => o.setName('item').setDescription('Item ID e.g. ENCHANTED_IRON').setRequired(true)),
   new SlashCommandBuilder().setName('auction').setDescription('Search the Auction House')
@@ -227,12 +258,12 @@ const commands = [
   new SlashCommandBuilder().setName('mayor').setDescription('View current Skyblock Mayor'),
   new SlashCommandBuilder().setName('help').setDescription('Show all bot commands'),
 
-  // Accessories
   new SlashCommandBuilder().setName('accessories').setDescription('Accessories / talisman tools')
-    .addSubcommand(s => s.setName('budget').setDescription('Plan accessories within your budget')
+    .addSubcommand(s => s.setName('budget')
+      .setDescription('Plan accessories within your budget & reach a target Magic Power')
       // required first
-      .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget').setRequired(true).setMinValue(1000))
-      .addStringOption(o => o.setName('goal').setDescription('Build goal').setRequired(true).addChoices(
+      .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget (e.g. 5000000)').setRequired(true).setMinValue(1000))
+      .addStringOption(o => o.setName('goal').setDescription('What are you building toward?').setRequired(true).addChoices(
         { name:'Combat DPS',       value:'combat'    },
         { name:'Dungeons',         value:'dungeons'  },
         { name:'All-round',        value:'allround'  },
@@ -240,6 +271,8 @@ const commands = [
         { name:'Mining / Farming', value:'gathering' },
       ))
       // optional last
+      .addIntegerOption(o => o.setName('target_mp').setDescription('Target Magic Power you want to reach (e.g. 300)').setMinValue(1).setMaxValue(1000))
+      .addStringOption(o => o.setName('current_mp').setDescription('Your current Magic Power (e.g. 150)'))
       .addStringOption(o => o.setName('tier_limit').setDescription('Max talisman tier to buy').addChoices(
         { name:'Common only',     value:'Common'    },
         { name:'Up to Uncommon',  value:'Uncommon'  },
@@ -247,57 +280,53 @@ const commands = [
         { name:'Up to Epic',      value:'Epic'      },
         { name:'Up to Legendary', value:'Legendary' },
       )))
-    .addSubcommand(s => s.setName('list').setDescription('Browse accessories by category')
+    .addSubcommand(s => s.setName('milestones')
+      .setDescription('See all MP milestones and what bonus stats they unlock'))
+    .addSubcommand(s => s.setName('list')
+      .setDescription('Browse accessories by category')
       .addStringOption(o => o.setName('category').setDescription('Category filter').addChoices(
-        { name:'Combat',  value:'Combat'   },{ name:'Speed',   value:'Speed'   },
-        { name:'Defense', value:'Defense'  },{ name:'Dungeons',value:'Dungeons'},
-        { name:'Utility', value:'Utility'  },{ name:'Fishing', value:'Fishing' },
-        { name:'Mining',  value:'Mining'   },{ name:'Farming', value:'Farming' },
+        { name:'Combat',   value:'Combat'   },{ name:'Speed',    value:'Speed'    },
+        { name:'Defense',  value:'Defense'  },{ name:'Dungeons', value:'Dungeons' },
+        { name:'Utility',  value:'Utility'  },{ name:'Fishing',  value:'Fishing'  },
+        { name:'Mining',   value:'Mining'   },{ name:'Farming',  value:'Farming'  },
       )))
-    .addSubcommand(s => s.setName('upgrade').setDescription('Best Magic Power picks within budget')
-      .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget').setRequired(true).setMinValue(1000))),
+    .addSubcommand(s => s.setName('upgrade')
+      .setDescription('Best Magic Power picks within budget')
+      // required first
+      .addIntegerOption(o => o.setName('budget').setDescription('Your coin budget').setRequired(true).setMinValue(1000))
+      // optional last
+      .addIntegerOption(o => o.setName('current_mp').setDescription('Your current MP (shows next milestone progress)').setMinValue(0))),
 
-  // Kuudra — FIXED: required options always before optional
   new SlashCommandBuilder().setName('kuudra').setDescription('All Kuudra commands')
     .addSubcommand(s => s.setName('setup').setDescription('Best gear setup for a tier')
-      // tier is required — listed first ✓
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC)))
-
     .addSubcommand(s => s.setName('profit').setDescription('Profit calculator')
-      // required first
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC))
-      // optional last
       .addIntegerOption(o => o.setName('runs').setDescription('Number of runs (default 1)').setMinValue(1).setMaxValue(10000)))
-
     .addSubcommand(s => s.setName('requirements').setDescription('Check if a player is ready for a tier')
       // required first
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC))
       // optional last
       .addStringOption(o => o.setName('username').setDescription('Minecraft username (skip if linked)').setRequired(false)))
-
     .addSubcommand(s => s.setName('lfg').setDescription('Post a Looking-for-Group message')
       // required first
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC))
       .addStringOption(o => o.setName('role').setDescription('Your role').setRequired(true).addChoices(
-        { name:'Mage',   value:'Mage'    }, { name:'Berserk',value:'Berserk' },
-        { name:'Tank',   value:'Tank'    }, { name:'Healer', value:'Healer'  },
+        { name:'Mage',   value:'Mage'    },{ name:'Berserk',value:'Berserk' },
+        { name:'Tank',   value:'Tank'    },{ name:'Healer', value:'Healer'  },
         { name:'Archer', value:'Archer'  },
       ))
       // optional last
       .addStringOption(o => o.setName('note').setDescription('Extra info (IGN, EHP, etc.)').setRequired(false)))
-
     .addSubcommand(s => s.setName('parties').setDescription('View active LFG parties')
-      // all optional
       .addStringOption(o => o.setName('tier').setDescription('Filter by tier').addChoices(...TC, { name:'All Tiers',value:'all' })))
-
     .addSubcommand(s => s.setName('guide').setDescription('Phase-by-phase strategy guide')
-      .addStringOption(o => o.setName('tier').setDescription('Tier guide (leave empty for general)').addChoices(...TC)))
-
+      .addStringOption(o => o.setName('tier').setDescription('Tier guide (empty = general)').addChoices(...TC)))
     .addSubcommand(s => s.setName('tiers').setDescription('Overview of all Kuudra tiers')),
 
 ].map(c => c.toJSON());
 
-// ─── REGISTER ────────────────────────────────────────────────────────────────
+// ─── REGISTER ─────────────────────────────────────────────────────────────────
 
 async function registerCommands() {
   const rest = new REST({ version:'10' }).setToken(DISCORD_TOKEN);
@@ -359,7 +388,7 @@ client.on('interactionCreate', async interaction => {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
       const profiles = await fetchProfiles(mojang.id);
-      const profile  = getActive(profiles, mojang.id);
+      const profile  = getActive(profiles);
       const member   = getMember(profile, mojang.id);
       if (!member) return interaction.editReply('No Skyblock data for **'+mojang.name+'**.');
       const purse=member.coin_purse||0, bank=profile.banking?.balance||0;
@@ -369,15 +398,15 @@ client.on('interactionCreate', async interaction => {
         .setTitle(mojang.name+"'s Skyblock Stats").setColor(0x00AAFF)
         .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
         .addFields(
-          { name:'Active Profile',  value:profile.cute_name||'Unknown',           inline:true },
-          { name:'Skill Average',   value:skillAvg(member).toFixed(2),            inline:true },
-          { name:'Catacombs Level', value:String(dungLvl(cataXP)),               inline:true },
-          { name:'Purse',           value:fmt(purse),                             inline:true },
-          { name:'Bank',            value:fmt(bank),                              inline:true },
-          { name:'Total Slayer XP', value:fmt(sxp),                              inline:true },
-          { name:'Deaths',          value:String(member.death_count||0),          inline:true },
-          { name:'Fairy Souls',     value:String(member.fairy_souls_collected||0),inline:true },
-          { name:'Total Profiles',  value:String(profiles.length),                inline:true },
+          { name:'Active Profile',  value:profile.cute_name||'Unknown',            inline:true },
+          { name:'Skill Average',   value:skillAvg(member).toFixed(2),             inline:true },
+          { name:'Catacombs Level', value:String(dungLvl(cataXP)),                inline:true },
+          { name:'Purse',           value:fmt(purse),                              inline:true },
+          { name:'Bank',            value:fmt(bank),                               inline:true },
+          { name:'Total Slayer XP', value:fmt(sxp),                               inline:true },
+          { name:'Deaths',          value:String(member.death_count||0),           inline:true },
+          { name:'Fairy Souls',     value:String(member.fairy_souls_collected||0), inline:true },
+          { name:'Total Profiles',  value:String(profiles.length),                 inline:true },
         ).setTimestamp()] });
     }
 
@@ -386,14 +415,14 @@ client.on('interactionCreate', async interaction => {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
       const profiles = await fetchProfiles(mojang.id);
-      const profile  = getActive(profiles, mojang.id);
+      const profile  = getActive(profiles);
       const member   = getMember(profile, mojang.id);
       if (!member) return interaction.editReply('No Skyblock data found.');
       const purse=member.coin_purse||0, bank=profile.banking?.balance||0;
       return interaction.editReply({ embeds:[new EmbedBuilder()
         .setTitle(mojang.name+"'s Networth").setColor(0xFFD700)
         .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
-        .setDescription('Liquid coins shown below. For full item networth check **sky.shiiyu.moe**')
+        .setDescription('Liquid coins shown. For full item networth check **sky.shiiyu.moe**')
         .addFields(
           { name:'Purse',        value:fmt(purse),      inline:true },
           { name:'Bank',         value:fmt(bank),        inline:true },
@@ -405,7 +434,7 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'skills') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
-      const member   = getMember(getActive(await fetchProfiles(mojang.id), mojang.id), mojang.id);
+      const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
       if (!member) return interaction.editReply('No Skyblock data found.');
       const list=[['farming',60],['mining',60],['combat',60],['foraging',50],['fishing',50],['enchanting',60],['alchemy',50],['taming',50],['carpentry',50],['runecrafting',25]];
       const lines=list.map(([k,max])=>{
@@ -425,7 +454,7 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'slayer') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
-      const member   = getMember(getActive(await fetchProfiles(mojang.id), mojang.id), mojang.id);
+      const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
       if (!member) return interaction.editReply('No Skyblock data found.');
       const bosses=[['zombie','Revenant Horror',9],['spider','Tarantula Broodfather',9],['wolf','Sven Packmaster',9],['enderman','Voidgloom Seraph',9],['blaze','Inferno Demonlord',9],['vampire','Riftstalker Bloodfiend',5]];
       const sl=member.slayer_bosses||{}; let totalXP=0;
@@ -446,7 +475,7 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'dungeons') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
-      const member   = getMember(getActive(await fetchProfiles(mojang.id), mojang.id), mojang.id);
+      const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
       if (!member) return interaction.editReply('No Skyblock data found.');
       const dg=member.dungeons||{}, ct=dg.dungeon_types?.catacombs||{};
       const cxp=ct.experience||0, total=Object.values(ct.tier_completions||{}).reduce((a,b)=>a+b,0);
@@ -456,10 +485,10 @@ client.on('interactionCreate', async interaction => {
         .setTitle(mojang.name+"'s Dungeons").setColor(0x8800AA)
         .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
         .addFields(
-          { name:'Catacombs Level',   value:dungLvl(cxp)+' ('+fmt(cxp)+' XP)',         inline:true },
-          { name:'Best Floor',        value:'Floor '+(ct.highest_tier_completed??'None'),inline:true },
-          { name:'Total Completions', value:String(total),                               inline:true },
-          { name:'Class Levels',      value:clLines.join('\n'),                          inline:false },
+          { name:'Catacombs Level',   value:dungLvl(cxp)+' ('+fmt(cxp)+' XP)',          inline:true },
+          { name:'Best Floor',        value:'Floor '+(ct.highest_tier_completed??'None'), inline:true },
+          { name:'Total Completions', value:String(total),                                inline:true },
+          { name:'Class Levels',      value:clLines.join('\n'),                           inline:false },
         ).setTimestamp()] });
     }
 
@@ -484,7 +513,7 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'compare') {
       const [m1,m2]=await Promise.all([fetchMojang(interaction.options.getString('player1')),fetchMojang(interaction.options.getString('player2'))]);
       const [p1,p2]=await Promise.all([fetchProfiles(m1.id),fetchProfiles(m2.id)]);
-      const mm1=getMember(getActive(p1,m1.id),m1.id), mm2=getMember(getActive(p2,m2.id),m2.id);
+      const mm1=getMember(getActive(p1),m1.id), mm2=getMember(getActive(p2),m2.id);
       if (!mm1||!mm2) return interaction.editReply('Could not find data for one or both players.');
       const a1=skillAvg(mm1),a2=skillAvg(mm2);
       const c1=dungLvl(mm1.dungeons?.dungeon_types?.catacombs?.experience||0);
@@ -546,92 +575,218 @@ client.on('interactionCreate', async interaction => {
     if (cmd === 'help') {
       return interaction.editReply({ embeds:[new EmbedBuilder()
         .setTitle('Hypixel Skyblock Bot — All Commands').setColor(0x00FFFF)
-        .setDescription('> Tip: Use `/link <username>` once and skip typing your name in every command!')
+        .setDescription('> Tip: Use `/link <username>` once and skip typing your name every time!')
         .addFields(
-          { name:'🔗 Account Linking', value:'/link — Link MC account\n/unlink — Remove link\n/whoami — Show linked account', inline:false },
-          { name:'📊 Player Stats',    value:'/stats\n/networth\n/skills\n/slayer\n/dungeons\n/profile\n/compare', inline:true },
-          { name:'🏪 Economy',         value:'/bazaar\n/auction\n/mayor', inline:true },
-          { name:'💍 Accessories',     value:'/accessories budget — Budget planner\n/accessories list — Browse all\n/accessories upgrade — Best MP picks', inline:false },
-          { name:'🔥 Kuudra',          value:'/kuudra setup\n/kuudra profit\n/kuudra requirements\n/kuudra lfg\n/kuudra parties\n/kuudra guide\n/kuudra tiers', inline:false },
+          { name:'🔗 Linking',    value:'/link\n/unlink\n/whoami', inline:true },
+          { name:'📊 Stats',      value:'/stats\n/networth\n/skills\n/slayer\n/dungeons\n/profile\n/compare', inline:true },
+          { name:'🏪 Economy',    value:'/bazaar\n/auction\n/mayor', inline:true },
+          { name:'💍 Accessories', value:'/accessories budget — Budget planner with MP target\n/accessories milestones — All MP milestone bonuses\n/accessories list — Browse all accessories\n/accessories upgrade — Best MP/coin picks', inline:false },
+          { name:'🔥 Kuudra',     value:'/kuudra setup\n/kuudra profit\n/kuudra requirements\n/kuudra lfg\n/kuudra parties\n/kuudra guide\n/kuudra tiers', inline:false },
         ).setFooter({ text:'Hypixel Skyblock Bot' }).setTimestamp()] });
     }
 
     // ── /accessories ─────────────────────────────────────────────────────────
     if (cmd === 'accessories') {
 
+      // ── budget ─────────────────────────────────────────────────────────────
       if (sub === 'budget') {
-        const budget=interaction.options.getInteger('budget');
-        const goal=interaction.options.getString('goal');
-        const tierLimit=interaction.options.getString('tier_limit')||'Legendary';
-        const tOrder=['Common','Uncommon','Rare','Epic','Legendary'];
-        const maxIdx=tOrder.indexOf(tierLimit);
-        const gCats={ combat:['Combat'], dungeons:['Dungeons','Combat','Defense'], allround:['Combat','Defense','Utility','Speed'], speed:['Speed','Utility'], gathering:['Mining','Farming','Fishing','Utility'] };
-        const wanted=gCats[goal]||[];
-        const sorted=ACC.filter(a=>tOrder.indexOf(a.tier)<=maxIdx)
-          .map(a=>({ ...a, pri:wanted.includes(a.cat)?1:2, mppc:a.mp/a.cost }))
-          .sort((a,b)=>a.pri-b.pri||b.mppc-a.mppc);
-        let rem=budget, totalMP=0, spent=0; const bought=[];
-        for (const a of sorted) { if (rem>=a.cost) { bought.push(a); rem-=a.cost; totalMP+=a.mp; spent+=a.cost; } }
+        const budget    = interaction.options.getInteger('budget');
+        const goal      = interaction.options.getString('goal');
+        const tierLimit = interaction.options.getString('tier_limit') || 'Legendary';
+        const targetMP  = interaction.options.getInteger('target_mp') || null;
+        const currentMPraw = interaction.options.getString('current_mp');
+        const currentMP = currentMPraw ? parseInt(currentMPraw) || 0 : 0;
+
+        const tOrder = ['Common','Uncommon','Rare','Epic','Legendary'];
+        const maxIdx = tOrder.indexOf(tierLimit);
+        const gCats  = {
+          combat:    ['Combat'],
+          dungeons:  ['Dungeons','Combat','Defense'],
+          allround:  ['Combat','Defense','Utility','Speed'],
+          speed:     ['Speed','Utility'],
+          gathering: ['Mining','Farming','Fishing','Utility'],
+        };
+        const wanted = gCats[goal] || [];
+
+        // If target MP set, find cheapest way to reach it
+        let sortedAcc = ACC.filter(a => tOrder.indexOf(a.tier) <= maxIdx);
+        if (targetMP && targetMP > currentMP) {
+          const needed = targetMP - currentMP;
+          // Sort: wanted categories first, then by MP/cost ratio
+          sortedAcc = sortedAcc
+            .map(a => ({ ...a, pri: wanted.includes(a.cat) ? 1 : 2, mppc: a.mp / a.cost }))
+            .sort((a, b) => a.pri - b.pri || b.mppc - a.mppc);
+          // Try to reach target MP with minimum spend
+          let rem = budget, gained = 0, spent = 0;
+          const bought = [];
+          for (const a of sortedAcc) {
+            if (gained >= needed) break;
+            if (rem >= a.cost) { bought.push(a); rem -= a.cost; gained += a.mp; spent += a.cost; }
+          }
+          const reached = currentMP + gained;
+          const reachedTarget = gained >= needed;
+          // Find next milestones
+          const nextMilestones = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= reached);
+          const stillNeeded    = MP_MILESTONES.filter(m => m.mp > reached).slice(0, 3);
+
+          const byCat = {};
+          bought.forEach(a => { if (!byCat[a.cat]) byCat[a.cat] = []; byCat[a.cat].push(a); });
+
+          const embed = new EmbedBuilder()
+            .setTitle('💍 Accessories — Target MP Plan')
+            .setColor(reachedTarget ? 0x00FF88 : 0xFFAA00)
+            .setDescription(
+              '**Budget:** '+fmt(budget)+' | **Goal:** '+goal+'\n'+
+              '**Current MP:** '+currentMP+' → **Target MP:** '+(targetMP||'none')+'\n\n'+
+              (reachedTarget
+                ? '✅ **Target reached!** You gain **+'+gained+' MP** (total: **'+reached+' MP**)\n💰 Cost: **'+fmt(spent)+'** | Remaining: **'+fmt(rem)+'**'
+                : '⚠️ Cannot fully reach **'+targetMP+' MP** within budget.\nGained: **+'+gained+' MP** (total: **'+reached+' MP**)\n💰 Cost: **'+fmt(spent)+'** | Remaining: **'+fmt(rem)+'**'
+              )
+            );
+
+          if (nextMilestones.length) {
+            embed.addFields({ name:'🎉 Milestones You\'ll Hit', value: nextMilestones.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
+          }
+          if (stillNeeded.length) {
+            embed.addFields({ name:'🎯 Next Milestones After That', value: stillNeeded.map(m=>'**'+m.mp+' MP** (+'+( m.mp - reached)+' more needed) — '+m.bonus).join('\n'), inline:false });
+          }
+
+          Object.entries(byCat).slice(0, 4).forEach(([cat, items]) => {
+            const lines = items.slice(0, 5).map(a => '• **'+a.name+'** — '+fmt(a.cost)+' (+'+a.mp+' MP)').join('\n');
+            embed.addFields({ name: cat+' ('+items.length+')', value: lines+(items.length>5?'\n_+' +(items.length-5)+' more_':''), inline:false });
+          });
+
+          embed.addFields({ name:'💡 Tips', value:'• Reforge: Warped Stone = best MP bonus\n• Recombobulate Legendary accessories\n• MP milestones: use `/accessories milestones` to see all', inline:false }).setTimestamp();
+          return interaction.editReply({ embeds:[embed] });
+        }
+
+        // No target MP — regular budget plan
+        const sorted = sortedAcc
+          .map(a => ({ ...a, pri: wanted.includes(a.cat) ? 1 : 2, mppc: a.mp / a.cost }))
+          .sort((a, b) => a.pri - b.pri || b.mppc - a.mppc);
+        let rem = budget, totalMP = 0, spent = 0;
+        const bought = [];
+        for (const a of sorted) { if (rem >= a.cost) { bought.push(a); rem -= a.cost; totalMP += a.mp; spent += a.cost; } }
         if (!bought.length) return interaction.editReply('Budget of **'+fmt(budget)+'** is too low. Cheapest is ~1,000 coins.');
-        const byCat={};
-        bought.forEach(a=>{ if (!byCat[a.cat]) byCat[a.cat]=[]; byCat[a.cat].push(a); });
-        const embed=new EmbedBuilder().setTitle('Accessories Budget Plan').setColor(0xFFD700)
-          .setDescription('**Budget:** '+fmt(budget)+' | **Goal:** '+goal+' | **Tier limit:** '+tierLimit+'\n\n✅ Buy **'+bought.length+'** accessories for **'+fmt(spent)+'**\n✨ Magic Power gain: **+'+totalMP+' MP**\n💰 Remaining: **'+fmt(rem)+'**');
-        Object.entries(byCat).slice(0,5).forEach(([cat,items])=>{
-          const lines=items.slice(0,5).map(a=>'• **'+a.name+'** — '+fmt(a.cost)+' (+'+a.mp+' MP)').join('\n');
-          embed.addFields({ name:cat+' ('+items.length+')', value:lines+(items.length>5?'\n_...+' +(items.length-5)+' more_':''), inline:false });
+
+        const byCat = {};
+        bought.forEach(a => { if (!byCat[a.cat]) byCat[a.cat] = []; byCat[a.cat].push(a); });
+
+        const totalReached = currentMP + totalMP;
+        const hittableMilestones = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= totalReached);
+        const nextMilestones = MP_MILESTONES.filter(m => m.mp > totalReached).slice(0, 3);
+
+        const embed = new EmbedBuilder()
+          .setTitle('💍 Accessories Budget Plan')
+          .setColor(0xFFD700)
+          .setDescription(
+            '**Budget:** '+fmt(budget)+' | **Goal:** '+goal+' | **Tier limit:** '+tierLimit+'\n\n'+
+            '✅ Buy **'+bought.length+'** accessories for **'+fmt(spent)+'**\n'+
+            '✨ Magic Power gain: **+'+totalMP+' MP**'+(currentMP?' ('+currentMP+' → **'+totalReached+' MP**':''+')')+'\n'+
+            '💰 Remaining: **'+fmt(rem)+'**'
+          );
+
+        if (hittableMilestones.length) {
+          embed.addFields({ name:'🎉 Milestones You\'ll Hit', value: hittableMilestones.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
+        }
+        if (nextMilestones.length) {
+          embed.addFields({ name:'🎯 Next Milestones After Budget', value: nextMilestones.map(m=>'**'+m.mp+' MP** (need +' +(m.mp-totalReached)+' more MP) — '+m.bonus).join('\n'), inline:false });
+        }
+
+        Object.entries(byCat).slice(0, 4).forEach(([cat, items]) => {
+          const lines = items.slice(0, 5).map(a => '• **'+a.name+'** — '+fmt(a.cost)+' (+'+a.mp+' MP)').join('\n');
+          embed.addFields({ name: cat+' ('+items.length+')', value: lines+(items.length>5?'\n_+' +(items.length-5)+' more_':''), inline:false });
         });
-        embed.addFields({ name:'Tips', value:'• Reforge: Itchy=Crit, Warped Stone=best MP\n• Recombobulate Legendary accessories\n• MP bonuses unlock at 100/200/300/400/500 MP', inline:false }).setTimestamp();
+
+        embed.addFields({ name:'💡 Tips', value:'• Reforge: Itchy=Crit, Warped Stone=best MP\n• Recombobulate Legendary accessories\n• Use `/accessories milestones` to see all MP bonuses', inline:false }).setTimestamp();
         return interaction.editReply({ embeds:[embed] });
       }
 
-      if (sub === 'list') {
-        const cat=interaction.options.getString('category');
-        const filtered=cat?ACC.filter(a=>a.cat===cat):ACC.slice(0,25);
-        if (!filtered.length) return interaction.editReply('No accessories found for that category.');
-        const grouped={};
-        filtered.forEach(a=>{ if (!grouped[a.tier]) grouped[a.tier]=[]; grouped[a.tier].push(a); });
-        const embed=new EmbedBuilder().setTitle('Accessories — '+(cat||'All')).setColor(0x00FFFF).setTimestamp();
-        ['Common','Uncommon','Rare','Epic','Legendary'].forEach(tier=>{
-          if (!grouped[tier]) return;
-          const lines=grouped[tier].map(a=>'• **'+a.name+'** — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
-          embed.addFields({ name:tier+' ('+grouped[tier].length+')', value:lines.slice(0,1000), inline:false });
-        });
-        return interaction.editReply({ embeds:[embed] });
-      }
-
-      if (sub === 'upgrade') {
-        const budget=interaction.options.getInteger('budget');
-        const sorted=[...ACC].sort((a,b)=>b.mp/b.cost-a.mp/a.cost);
-        let rem=budget, totalMP=0; const bought=[];
-        for (const a of sorted) { if (rem>=a.cost) { bought.push(a); rem-=a.cost; totalMP+=a.mp; } }
-        const lines=bought.slice(0,15).map((a,i)=>(i+1)+'. **'+a.name+'** ['+a.tier+'] — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
+      // ── milestones ─────────────────────────────────────────────────────────
+      if (sub === 'milestones') {
+        const lines = MP_MILESTONES.map(m => '**'+m.mp+' MP** — '+m.bonus);
+        const totalACC = ACC.reduce((s, a) => s + a.mp, 0);
         return interaction.editReply({ embeds:[new EmbedBuilder()
-          .setTitle('Best MP Upgrades for '+fmt(budget)+' Coins').setColor(0xAA00FF)
-          .setDescription('✨ Total MP: **+'+totalMP+'** from **'+bought.length+'** accessories\n💰 Spent: **'+fmt(budget-rem)+'** | Left: **'+fmt(rem)+'**')
-          .addFields(
-            { name:'Top Picks', value:lines||'None found', inline:false },
-            { name:'Remember', value:'• Recombobulate Legendary for extra MP\n• Warped Stone = best MP reforge\n• Use `/accessories budget` for goal-focused plan', inline:false },
-          ).setTimestamp()] });
+          .setTitle('✨ Magic Power Milestones')
+          .setColor(0xFFAA00)
+          .setDescription(
+            'Each milestone unlocks permanent bonus stats.\n'+
+            'Max possible MP from all accessories: **'+totalACC+' MP**\n\n'+
+            lines.join('\n')
+          )
+          .addFields({ name:'How to gain MP fast', value:'• Buy more accessories (each one adds MP)\n• Reforge with **Warped Stone** for extra MP\n• Recombobulate Legendary accessories for +1 MP bonus\n• Use `/accessories budget` to plan your upgrades', inline:false })
+          .setTimestamp()] });
+      }
+
+      // ── list ───────────────────────────────────────────────────────────────
+      if (sub === 'list') {
+        const cat = interaction.options.getString('category');
+        const filtered = cat ? ACC.filter(a => a.cat === cat) : ACC.slice(0, 25);
+        if (!filtered.length) return interaction.editReply('No accessories found for that category.');
+        const grouped = {};
+        filtered.forEach(a => { if (!grouped[a.tier]) grouped[a.tier] = []; grouped[a.tier].push(a); });
+        const embed = new EmbedBuilder().setTitle('💍 Accessories — '+(cat||'All')).setColor(0x00FFFF).setTimestamp();
+        ['Common','Uncommon','Rare','Epic','Legendary'].forEach(tier => {
+          if (!grouped[tier]) return;
+          const lines = grouped[tier].map(a => '• **'+a.name+'** — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
+          embed.addFields({ name: tier+' ('+grouped[tier].length+')', value: lines.slice(0, 1000), inline:false });
+        });
+        return interaction.editReply({ embeds:[embed] });
+      }
+
+      // ── upgrade ────────────────────────────────────────────────────────────
+      if (sub === 'upgrade') {
+        const budget    = interaction.options.getInteger('budget');
+        const currentMP = interaction.options.getInteger('current_mp') || 0;
+        const sorted    = [...ACC].sort((a, b) => b.mp/b.cost - a.mp/a.cost);
+        let rem = budget, totalMP = 0;
+        const bought = [];
+        for (const a of sorted) { if (rem >= a.cost) { bought.push(a); rem -= a.cost; totalMP += a.mp; } }
+
+        const totalReached = currentMP + totalMP;
+        const hittable = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= totalReached);
+        const next     = MP_MILESTONES.filter(m => m.mp > totalReached).slice(0, 3);
+
+        const lines = bought.slice(0, 15).map((a, i) => (i+1)+'. **'+a.name+'** ['+a.tier+'] — '+fmt(a.cost)+' | +'+a.mp+' MP | '+a.desc).join('\n');
+
+        const embed = new EmbedBuilder()
+          .setTitle('⚡ Best MP/Coin Accessories for '+fmt(budget))
+          .setColor(0xAA00FF)
+          .setDescription(
+            '✨ Total MP gain: **+'+totalMP+' MP**'+(currentMP?' ('+currentMP+' → **'+totalReached+'**)':'')+'\n'+
+            '💰 Spent: **'+fmt(budget-rem)+'** | Remaining: **'+fmt(rem)+'**\n'+
+            '📦 Accessories: **'+bought.length+'**'
+          )
+          .addFields({ name:'Top Picks (best MP per coin)', value:lines||'None found', inline:false });
+
+        if (hittable.length) {
+          embed.addFields({ name:'🎉 Milestones You\'ll Hit', value: hittable.map(m=>'**'+m.mp+' MP** — '+m.bonus).join('\n'), inline:false });
+        }
+        if (next.length) {
+          embed.addFields({ name:'🎯 Next Milestones', value: next.map(m=>'**'+m.mp+' MP** (need +' +(m.mp-totalReached)+' more MP) — '+m.bonus).join('\n'), inline:false });
+        }
+
+        embed.addFields({ name:'💡 Remember', value:'• Recombobulate Legendary for extra MP\n• Warped Stone = best MP reforge\n• Use `/accessories budget <coins> <goal>` for goal-focused plan', inline:false }).setTimestamp();
+        return interaction.editReply({ embeds:[embed] });
       }
     }
 
-    // ── /kuudra ──────────────────────────────────────────────────────────────
+    // ── /kuudra ───────────────────────────────────────────────────────────────
     if (cmd === 'kuudra') {
 
       if (sub === 'setup') {
-        const d=TIERS[interaction.options.getString('tier')];
+        const d = TIERS[interaction.options.getString('tier')];
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle('Kuudra '+d.label+' — Setup').setColor(d.color)
           .addFields(
-            { name:'Armor',          value:d.setup.armor,        inline:false },
-            { name:'Weapon',         value:d.setup.weapon,       inline:false },
-            { name:'Pet',            value:d.setup.pet,          inline:true  },
-            { name:'Accessories',    value:d.setup.acc,          inline:false },
-            { name:'Reforges',       value:d.setup.reforge,      inline:false },
-            { name:'Min EHP',        value:fmt(d.minEHP),        inline:true  },
-            { name:'Rec Cata Level', value:'Level '+d.recCata+'+',inline:true },
-            { name:'Notes',          value:d.setup.notes,        inline:false },
+            { name:'Armor',          value:d.setup.armor,         inline:false },
+            { name:'Weapon',         value:d.setup.weapon,        inline:false },
+            { name:'Pet',            value:d.setup.pet,           inline:true  },
+            { name:'Accessories',    value:d.setup.acc,           inline:false },
+            { name:'Reforges',       value:d.setup.reforge,       inline:false },
+            { name:'Min EHP',        value:fmt(d.minEHP),         inline:true  },
+            { name:'Rec Cata Level', value:'Level '+d.recCata+'+', inline:true },
+            { name:'Notes',          value:d.setup.notes,         inline:false },
           ).setTimestamp()] });
       }
 
@@ -641,28 +796,28 @@ client.on('interactionCreate', async interaction => {
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle('Kuudra '+d.label+' — Profit').setColor(d.color)
           .addFields(
-            { name:'Runs',       value:String(runs),            inline:true },
-            { name:'Avg Loot',   value:fmt(d.profit.avgLoot),   inline:true },
-            { name:'Key Cost',   value:fmt(d.profit.keyCost),   inline:true },
-            { name:'Total Loot', value:fmt(loot),               inline:true },
-            { name:'Total Keys', value:fmt(keys),               inline:true },
+            { name:'Runs',       value:String(runs),             inline:true },
+            { name:'Avg Loot',   value:fmt(d.profit.avgLoot),    inline:true },
+            { name:'Key Cost',   value:fmt(d.profit.keyCost),    inline:true },
+            { name:'Total Loot', value:fmt(loot),                inline:true },
+            { name:'Total Keys', value:fmt(keys),                inline:true },
             { name:'Net Profit', value:'**'+fmt(net)+'** coins', inline:true },
-            { name:'Est/Hour',   value:'~'+fmt(net*4)+' coins', inline:false },
+            { name:'Est/Hour',   value:'~'+fmt(net*4)+' coins',  inline:false },
           ).setTimestamp()] });
       }
 
       if (sub === 'requirements') {
-        const tier=interaction.options.getString('tier');
-        const d=TIERS[tier];
-        const username=await resolveUser(interaction);
-        const mojang=await fetchMojang(username);
-        const member=getMember(getActive(await fetchProfiles(mojang.id),mojang.id),mojang.id);
+        const tier    = interaction.options.getString('tier');
+        const d       = TIERS[tier];
+        const username = await resolveUser(interaction);
+        const mojang  = await fetchMojang(username);
+        const member  = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
         if (!member) return interaction.editReply('No Skyblock data found.');
         const hp=member.stats?.health||100, def=member.stats?.defense||0, ehp=Math.round(hp*(1+def/100));
         const cata=dungLvl(member.dungeons?.dungeon_types?.catacombs?.experience||0);
         const avg=skillAvg(member);
         const ok1=ehp>=d.minEHP, ok2=cata>=d.recCata, ok3=avg>=30, all=ok1&&ok2&&ok3;
-        const t=v=>v?'YES':'NO';
+        const t = v => v ? '✅ YES' : '❌ NO';
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle(mojang.name+' — '+d.label+' Readiness').setColor(all?0x00FF44:0xFF4400)
           .setThumbnail('https://mc-heads.net/avatar/'+mojang.id)
@@ -670,7 +825,7 @@ client.on('interactionCreate', async interaction => {
             { name:'EHP (est.) — '+t(ok1),   value:fmt(ehp)+' / '+fmt(d.minEHP)+' required', inline:false },
             { name:'Catacombs — '+t(ok2),     value:cata+' / '+d.recCata+' recommended',       inline:true  },
             { name:'Skill Average — '+t(ok3), value:avg.toFixed(1)+' / 30 recommended',        inline:true  },
-            { name:'Verdict', value:all?'READY for '+d.label+'!':'Not fully ready. Improve stats marked NO.', inline:false },
+            { name:'Verdict', value:all?'✅ **READY for '+d.label+'!**':'❌ Not fully ready. Improve stats marked NO.', inline:false },
           ).setTimestamp()] });
       }
 
@@ -680,7 +835,7 @@ client.on('interactionCreate', async interaction => {
         if (!lfgStore.has(gid)) lfgStore.set(gid,[]);
         const list=lfgStore.get(gid).filter(e=>e.userId!==interaction.user.id);
         list.push({ userId:interaction.user.id, tag:interaction.user.tag, tier, role, note, ts:Date.now() });
-        lfgStore.set(gid,list);
+        lfgStore.set(gid, list);
         return interaction.editReply({ embeds:[new EmbedBuilder()
           .setTitle('LFG — Kuudra '+d.label).setColor(d.color)
           .setDescription('<@'+interaction.user.id+'> is looking for a Kuudra group!')
@@ -694,7 +849,7 @@ client.on('interactionCreate', async interaction => {
       if (sub === 'parties') {
         const tf=interaction.options.getString('tier')||'all', gid=interaction.guildId, now=Date.now();
         const fresh=(lfgStore.get(gid)||[]).filter(e=>now-e.ts<30*60000);
-        lfgStore.set(gid,fresh);
+        lfgStore.set(gid, fresh);
         const filtered=tf==='all'?fresh:fresh.filter(e=>e.tier===tf);
         if (!filtered.length) return interaction.editReply('No active LFG parties. Post one with `/kuudra lfg`!');
         const embed=new EmbedBuilder().setTitle('Active LFG'+(tf!=='all'?' — '+TIERS[tf].label:' — All Tiers')).setColor(0xFF6600).setTimestamp();
@@ -729,7 +884,7 @@ client.on('interactionCreate', async interaction => {
 
   } catch (err) {
     console.error('Error:', err.message);
-    try { await interaction.editReply('❌ '+(err.message||'Unknown error')); } catch(_) {}
+    try { await interaction.editReply('❌ ' + (err.message || 'Unknown error')); } catch(_) {}
   }
 });
 
