@@ -1,7 +1,7 @@
 {
   "name": "hypixel-skyblock-bot",
   "version": "1.0.0",
-  "description": "Hypixel Skyblock Discord Bot with full Kuudra support",
+  "description": "Hypixel Skyblock Discord Bot",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
@@ -9,7 +9,8 @@
   "dependencies": {
     "discord.js": "^14.15.3",
     "axios": "^1.7.2",
-    "node-cache": "^5.1.2"
+    "node-cache": "^5.1.2",
+    "skyblock-networth": "^2.2.2"
   },
   "engines": {
     "node": ">=18.0.0"
