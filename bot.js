@@ -56,13 +56,36 @@ async function fetchMayor() {
 async function fetchNetworth(username) {
   const k = "nw_" + username.toLowerCase();
   if (cache.has(k)) return cache.get(k);
+
+  const browserHeaders = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://sky.shiiyu.moe/",
+    "Origin": "https://sky.shiiyu.moe",
+  };
+
+  // Attempt 1: sky.shiiyu.moe with browser headers
   try {
-    const r = await axios.get("https://sky.shiiyu.moe/api/v2/profile/" + username, {
-      timeout: 15000,
-      headers: { "User-Agent": "Mozilla/5.0 SkyblockDiscordBot/1.0", "Accept": "application/json" },
-    });
-    cache.set(k, r.data); return r.data;
-  } catch (e) { console.log("SkyCrypt:", e.message); return null; }
+    const r = await axios.get("https://sky.shiiyu.moe/api/v2/profile/" + username, { timeout: 15000, headers: browserHeaders });
+    console.log("[NW] SkyCrypt status:", r.status, "profiles:", Object.keys(r.data?.profiles || {}).join(","));
+    if (r.data?.profiles && Object.keys(r.data.profiles).length > 0) {
+      cache.set(k, { _source: "skycrypt", profiles: r.data.profiles });
+      return { _source: "skycrypt", profiles: r.data.profiles };
+    }
+  } catch (e) { console.log("[NW] SkyCrypt failed:", e.response?.status || e.message); }
+
+  // Attempt 2: sky.coflnet.com networth API
+  try {
+    const r2 = await axios.get("https://sky.coflnet.com/api/player/profile/" + username + "/networth", { timeout: 12000 });
+    console.log("[NW] CoflNet status:", r2.status);
+    if (r2.data) {
+      cache.set(k, { _source: "coflnet", data: r2.data });
+      return { _source: "coflnet", data: r2.data };
+    }
+  } catch (e2) { console.log("[NW] CoflNet failed:", e2.response?.status || e2.message); }
+
+  return null;
 }
 
 function getActive(profiles) {
@@ -453,42 +476,84 @@ client.on("interactionCreate", async interaction => {
 
       if (scData) {
         try {
-          const pObj = scData.profiles || {};
-          const keys = Object.keys(pObj);
-          let apData = null;
-          for (const key of keys) { const p = pObj[key]; if (p.current === true || p.selected === true) { apData = p; break; } }
-          if (!apData) { for (const key of keys) { if (key.toLowerCase() === profileName.toLowerCase()) { apData = pObj[key]; break; } } }
-          if (!apData && keys.length) apData = pObj[keys[0]];
-          const nw = apData?.data?.networth;
-          if (nw != null) {
-            parsed = true;
-            const total = nw.networth || 0;
-            const unsoul = nw.unsoulbound || 0;
-            const cats  = nw.categories || {};
-            embed.setTitle(mojang.name + "'s Networth on " + profileName);
-            embed.setDescription("**Total: " + total.toLocaleString() + " (" + fmt(total) + ")**\nUnsoulbound: " + fmt(unsoul) + "\nPurse: " + fmt(purse) + "  |  Bank: " + fmt(bank));
-            const catConfig = [
-              { key:"armor",       label:"Armor"       },
-              { key:"inventory",   label:"Items"        },
-              { key:"pets",        label:"Pets"         },
-              { key:"accessories", label:"Accessories"  },
-              { key:"wardrobe",    label:"Wardrobe"     },
-              { key:"ender_chest", label:"Ender Chest"  },
-              { key:"storage",     label:"Storage"      },
-              { key:"museum",      label:"Museum"       },
-              { key:"sacks",       label:"Sacks"        },
-            ];
-            for (const { key, label } of catConfig) {
-              const cat = cats[key];
-              if (!cat || !(cat.total > 0)) continue;
-              const items = (cat.items||[]).sort((a,b)=>(b.price||0)-(a.price||0)).slice(0,4);
-              let val = "**" + fmt(cat.total) + "**";
-              if (items.length) val += "\n" + items.map(it => "  " + (it.name||"?") + " — " + fmt(it.price||0)).join("\n");
-              if (val.length > 1020) val = val.slice(0,1020) + "...";
-              embed.addFields({ name: label + " (" + fmt(cat.total) + ")", value: val, inline:false });
+          if (scData._source === "skycrypt") {
+            // Parse sky.shiiyu.moe response
+            const pObj = scData.profiles || {};
+            const keys = Object.keys(pObj);
+            let apData = null;
+            // Find active profile: try current flag first
+            for (const key of keys) {
+              const p = pObj[key];
+              if (p.current === true || p.selected === true) { apData = p; break; }
+            }
+            // Match by profile cute name
+            if (!apData) {
+              for (const key of keys) {
+                if (key.toLowerCase() === profileName.toLowerCase()) { apData = pObj[key]; break; }
+              }
+            }
+            // Fallback: highest networth profile
+            if (!apData && keys.length) {
+              apData = keys.reduce((best, key) => {
+                const nw1 = pObj[key]?.data?.networth?.networth || 0;
+                const nw2 = pObj[best]?.data?.networth?.networth || 0;
+                return nw1 > nw2 ? key : best;
+              }, keys[0]);
+              apData = pObj[apData];
+            }
+            const nw = apData?.data?.networth;
+            console.log("[NW] apData keys:", Object.keys(apData || {}), "nw:", nw?.networth);
+            if (nw != null) {
+              parsed = true;
+              const total = nw.networth || 0;
+              const unsoul = nw.unsoulbound || 0;
+              const cats  = nw.categories || {};
+              embed.setTitle(mojang.name + "'s Networth on " + profileName);
+              embed.setDescription("**Total: " + total.toLocaleString() + " (" + fmt(total) + ")**\nUnsoulbound: " + fmt(unsoul) + "\nPurse: " + fmt(purse) + "  |  Bank: " + fmt(bank));
+              const catConfig = [
+                { key:"armor",       label:"Armor"       },
+                { key:"inventory",   label:"Items"        },
+                { key:"pets",        label:"Pets"         },
+                { key:"accessories", label:"Accessories"  },
+                { key:"wardrobe",    label:"Wardrobe"     },
+                { key:"ender_chest", label:"Ender Chest"  },
+                { key:"storage",     label:"Storage"      },
+                { key:"museum",      label:"Museum"       },
+                { key:"sacks",       label:"Sacks"        },
+              ];
+              for (const { key, label } of catConfig) {
+                const cat = cats[key];
+                if (!cat || !(cat.total > 0)) continue;
+                const items = (cat.items||[]).sort((a,b)=>(b.price||0)-(a.price||0)).slice(0,4);
+                let val = "**" + fmt(cat.total) + "**";
+                if (items.length) val += "\n" + items.map(it => "  " + (it.name||"?") + " — " + fmt(it.price||0)).join("\n");
+                if (val.length > 1020) val = val.slice(0,1020) + "...";
+                embed.addFields({ name: label + " (" + fmt(cat.total) + ")", value: val, inline:false });
+              }
+            }
+          } else if (scData._source === "coflnet") {
+            // Parse sky.coflnet.com response
+            const d = scData.data;
+            if (d && (d.networth || d.unsoulbound)) {
+              parsed = true;
+              const total = d.networth || 0;
+              const unsoul = d.unsoulbound || 0;
+              embed.setTitle(mojang.name + "'s Networth");
+              embed.setDescription("**Total: " + total.toLocaleString() + " (" + fmt(total) + ")**\nUnsoulbound: " + fmt(unsoul) + "\nPurse: " + fmt(purse) + "  |  Bank: " + fmt(bank));
+              // CoflNet categories
+              const catMap = [
+                ["armor","Armor"],["inventory","Items"],["pets","Pets"],
+                ["accessories","Accessories"],["wardrobe","Wardrobe"],
+                ["enderChest","Ender Chest"],["storage","Storage"],
+              ];
+              for (const [key,label] of catMap) {
+                const val = d[key];
+                if (!val || val <= 0) continue;
+                embed.addFields({ name: label + " — " + fmt(val), value: "**" + fmt(val) + "**", inline:true });
+              }
             }
           }
-        } catch(e) { console.error("SkyCrypt parse:", e.message); }
+        } catch(e) { console.error("[NW] Parse error:", e.message); }
       }
 
       if (!parsed) {
