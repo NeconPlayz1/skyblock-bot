@@ -53,39 +53,117 @@ async function fetchMayor() {
   cache.set("mayor", r.data); return r.data;
 }
 
-async function fetchNetworth(username) {
-  const k = "nw_" + username.toLowerCase();
+/* ── NETWORTH CALCULATOR (no external API needed) ───────────────────────── */
+/* Uses Hypixel data + Bazaar prices to estimate networth like Sky Miner    */
+
+// Approximate coin value of each slayer level
+const SLAYER_COIN_VALUE = {
+  zombie:   [0, 5000, 20000, 100000, 500000, 1500000, 4000000, 10000000, 30000000, 80000000],
+  spider:   [0, 5000, 20000, 100000, 500000, 1500000, 4000000, 10000000, 30000000, 80000000],
+  wolf:     [0, 8000, 30000, 150000, 600000, 2000000, 5000000, 12000000, 35000000, 90000000],
+  enderman: [0, 8000, 30000, 150000, 600000, 2000000, 5000000, 12000000, 35000000, 90000000],
+  blaze:    [0, 8000, 30000, 150000, 600000, 2000000, 5000000, 12000000, 35000000, 90000000],
+  vampire:  [0, 10000, 50000, 200000, 800000, 3000000],
+};
+
+// Approximate coin value of each Kuudra infernal completion
+const KUUDRA_INFERNAL_VALUE = 5000000;
+const KUUDRA_FIERY_VALUE    = 1200000;
+const KUUDRA_BURNING_VALUE  = 350000;
+const KUUDRA_HOT_VALUE      = 120000;
+
+// Catacombs level coin estimate (rough)
+function cataCoinValue(lvl) {
+  if (lvl >= 50) return 800000000;
+  if (lvl >= 40) return 300000000;
+  if (lvl >= 35) return 100000000;
+  if (lvl >= 30) return 40000000;
+  if (lvl >= 25) return 15000000;
+  if (lvl >= 20) return 5000000;
+  if (lvl >= 15) return 1000000;
+  return lvl * 50000;
+}
+
+// Skill level coin estimate
+function skillCoinValue(avg) {
+  if (avg >= 55) return 200000000;
+  if (avg >= 50) return 80000000;
+  if (avg >= 45) return 30000000;
+  if (avg >= 40) return 10000000;
+  if (avg >= 35) return 3000000;
+  if (avg >= 30) return 800000;
+  return avg * 20000;
+}
+
+async function calcNetworth(member, profile) {
+  const k = "calc_nw_" + (profile?.profile_id || "x");
   if (cache.has(k)) return cache.get(k);
 
-  const browserHeaders = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://sky.shiiyu.moe/",
-    "Origin": "https://sky.shiiyu.moe",
+  const purse = member.coin_purse || 0;
+  const bank  = profile?.banking?.balance || 0;
+  const coins = purse + bank;
+
+  // Slayer
+  const sl = getSlayerBosses(member);
+  let slayerNW = 0;
+  for (const [type, tbl] of Object.entries(SLAYER_COIN_VALUE)) {
+    const lvl = slayerLvl(sl[type]?.xp || 0, type);
+    slayerNW += tbl[lvl] || 0;
+  }
+
+  // Kuudra
+  const kuudra = member.nether_island_player_data?.kuudra_completed_tiers || {};
+  const kuudraNW =
+    (kuudra.infernal || 0) * KUUDRA_INFERNAL_VALUE +
+    (kuudra.fiery    || 0) * KUUDRA_FIERY_VALUE +
+    (kuudra.burning  || 0) * KUUDRA_BURNING_VALUE +
+    (kuudra.hot      || 0) * KUUDRA_HOT_VALUE;
+
+  // Dungeons
+  const cataXP  = member.dungeons?.dungeon_types?.catacombs?.experience || 0;
+  const cataLvl = dungLvl(cataXP);
+  const dungNW  = cataCoinValue(cataLvl);
+
+  // Skills
+  const apiOff = skillsDisabled(member);
+  const skillNW = apiOff ? 0 : skillCoinValue(skillAvg(member));
+
+  // Essence
+  const essence = member.essence || {};
+  const essTypes = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
+  let essenceCoins = 0;
+  for (const t of essTypes) {
+    essenceCoins += (essence[t]?.current || 0) * 150; // rough ~150 coins per essence
+  }
+
+  // Bazaar — try to value common materials the player likely has
+  let bazaarNW = 0;
+  try {
+    const bz = await fetchBazaar();
+    // Collection rough estimates from player collection data
+    const col = member.collection || {};
+    const colItems = [
+      ["ENCHANTED_IRON",         col.IRON       ? Math.min(Math.floor(col.IRON       / 160), 1000) : 0],
+      ["ENCHANTED_GOLD",         col.GOLD       ? Math.min(Math.floor(col.GOLD       / 160), 500)  : 0],
+      ["ENCHANTED_DIAMOND",      col.DIAMOND    ? Math.min(Math.floor(col.DIAMOND    / 160), 500)  : 0],
+      ["ENCHANTED_OBSIDIAN",     col.OBSIDIAN   ? Math.min(Math.floor(col.OBSIDIAN   / 160), 500)  : 0],
+      ["ENCHANTED_SUGAR_CANE",   col.SUGAR_CANE ? Math.min(Math.floor(col.SUGAR_CANE/ 160), 500)  : 0],
+    ];
+    for (const [id, qty] of colItems) {
+      const price = bz[id]?.quick_status?.sellPrice || 0;
+      bazaarNW += price * qty;
+    }
+  } catch(e) { /* ignore */ }
+
+  const total = coins + slayerNW + kuudraNW + dungNW + skillNW + essenceCoins + bazaarNW;
+
+  const result = {
+    total, coins, purse, bank,
+    slayerNW, kuudraNW, dungNW, skillNW, essenceCoins, bazaarNW,
+    cataLvl, apiOff,
   };
-
-  // Attempt 1: sky.shiiyu.moe with browser headers
-  try {
-    const r = await axios.get("https://sky.shiiyu.moe/api/v2/profile/" + username, { timeout: 15000, headers: browserHeaders });
-    console.log("[NW] SkyCrypt status:", r.status, "profiles:", Object.keys(r.data?.profiles || {}).join(","));
-    if (r.data?.profiles && Object.keys(r.data.profiles).length > 0) {
-      cache.set(k, { _source: "skycrypt", profiles: r.data.profiles });
-      return { _source: "skycrypt", profiles: r.data.profiles };
-    }
-  } catch (e) { console.log("[NW] SkyCrypt failed:", e.response?.status || e.message); }
-
-  // Attempt 2: sky.coflnet.com networth API
-  try {
-    const r2 = await axios.get("https://sky.coflnet.com/api/player/profile/" + username + "/networth", { timeout: 12000 });
-    console.log("[NW] CoflNet status:", r2.status);
-    if (r2.data) {
-      cache.set(k, { _source: "coflnet", data: r2.data });
-      return { _source: "coflnet", data: r2.data };
-    }
-  } catch (e2) { console.log("[NW] CoflNet failed:", e2.response?.status || e2.message); }
-
-  return null;
+  cache.set(k, result);
+  return result;
 }
 
 function getActive(profiles) {
@@ -460,110 +538,63 @@ client.on("interactionCreate", async interaction => {
         .setTimestamp()] });
     }
 
-    /* /networth */
+    /* /networth — Sky Miner style calculated networth */
     if (cmd === "networth") {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
-      const [profiles, scData] = await Promise.all([fetchProfiles(mojang.id), fetchNetworth(mojang.name)]);
-      const profile     = getActive(profiles);
-      const member      = getMember(profile, mojang.id);
-      const purse       = member ? (member.coin_purse||0) : 0;
-      const bank        = profile ? (profile.banking?.balance||0) : 0;
+      const profiles = await fetchProfiles(mojang.id);
+      const profile  = getActive(profiles);
+      const member   = getMember(profile, mojang.id);
+      if (!member) return interaction.editReply("No Skyblock data for **" + mojang.name + "**.");
+
       const profileName = profile?.cute_name || "Unknown";
+      const nw = await calcNetworth(member, profile);
 
-      const embed = new EmbedBuilder().setColor(0xFFD700).setThumbnail("https://mc-heads.net/avatar/" + mojang.id).setFooter({ text:"Powered by SkyCrypt (sky.shiiyu.moe)" }).setTimestamp();
-      let parsed = false;
+      const embed = new EmbedBuilder()
+        .setColor(0xFFD700)
+        .setThumbnail("https://mc-heads.net/avatar/" + mojang.id)
+        .setTitle(mojang.name + "'s Networth on " + profileName)
+        .setDescription(
+          "**Networth: " + nw.total.toLocaleString() + " (" + fmt(nw.total) + ")**\n" +
+          "> Estimated from Hypixel data — for exact value visit sky.shiiyu.moe"
+        )
+        .addFields(
+          { name: "Coins",
+            value: [
+              "💰 **Purse:** " + fmt(nw.purse),
+              "🏦 **Bank:** "  + fmt(nw.bank),
+              "💎 **Total Liquid:** " + fmt(nw.coins),
+            ].join("\n"),
+            inline: false },
+          { name: "Slayer Value",
+            value: "⚔️ **~" + fmt(nw.slayerNW) + "**",
+            inline: true },
+          { name: "Kuudra Value",
+            value: "🔥 **~" + fmt(nw.kuudraNW) + "**",
+            inline: true },
+          { name: "Dungeons Value",
+            value: "🏰 **~" + fmt(nw.dungNW) + "** (Cata " + nw.cataLvl + ")",
+            inline: true },
+          { name: "Skills Value",
+            value: nw.apiOff ? "📚 **API Off**" : "📚 **~" + fmt(nw.skillNW) + "**",
+            inline: true },
+          { name: "Essence Value",
+            value: "✨ **~" + fmt(nw.essenceCoins) + "**",
+            inline: true },
+          { name: "Materials",
+            value: "📦 **~" + fmt(nw.bazaarNW) + "**",
+            inline: true },
+          { name: "Full Item Breakdown",
+            value: "[View on SkyCrypt](https://sky.shiiyu.moe/stats/" + mojang.name + ") for armor, weapons, pets, accessories exact values.",
+            inline: false },
+        )
+        .setFooter({ text: "Note: Item values estimated. For exact networth check sky.shiiyu.moe" })
+        .setTimestamp();
 
-      if (scData) {
-        try {
-          if (scData._source === "skycrypt") {
-            // Parse sky.shiiyu.moe response
-            const pObj = scData.profiles || {};
-            const keys = Object.keys(pObj);
-            let apData = null;
-            // Find active profile: try current flag first
-            for (const key of keys) {
-              const p = pObj[key];
-              if (p.current === true || p.selected === true) { apData = p; break; }
-            }
-            // Match by profile cute name
-            if (!apData) {
-              for (const key of keys) {
-                if (key.toLowerCase() === profileName.toLowerCase()) { apData = pObj[key]; break; }
-              }
-            }
-            // Fallback: highest networth profile
-            if (!apData && keys.length) {
-              apData = keys.reduce((best, key) => {
-                const nw1 = pObj[key]?.data?.networth?.networth || 0;
-                const nw2 = pObj[best]?.data?.networth?.networth || 0;
-                return nw1 > nw2 ? key : best;
-              }, keys[0]);
-              apData = pObj[apData];
-            }
-            const nw = apData?.data?.networth;
-            console.log("[NW] apData keys:", Object.keys(apData || {}), "nw:", nw?.networth);
-            if (nw != null) {
-              parsed = true;
-              const total = nw.networth || 0;
-              const unsoul = nw.unsoulbound || 0;
-              const cats  = nw.categories || {};
-              embed.setTitle(mojang.name + "'s Networth on " + profileName);
-              embed.setDescription("**Total: " + total.toLocaleString() + " (" + fmt(total) + ")**\nUnsoulbound: " + fmt(unsoul) + "\nPurse: " + fmt(purse) + "  |  Bank: " + fmt(bank));
-              const catConfig = [
-                { key:"armor",       label:"Armor"       },
-                { key:"inventory",   label:"Items"        },
-                { key:"pets",        label:"Pets"         },
-                { key:"accessories", label:"Accessories"  },
-                { key:"wardrobe",    label:"Wardrobe"     },
-                { key:"ender_chest", label:"Ender Chest"  },
-                { key:"storage",     label:"Storage"      },
-                { key:"museum",      label:"Museum"       },
-                { key:"sacks",       label:"Sacks"        },
-              ];
-              for (const { key, label } of catConfig) {
-                const cat = cats[key];
-                if (!cat || !(cat.total > 0)) continue;
-                const items = (cat.items||[]).sort((a,b)=>(b.price||0)-(a.price||0)).slice(0,4);
-                let val = "**" + fmt(cat.total) + "**";
-                if (items.length) val += "\n" + items.map(it => "  " + (it.name||"?") + " — " + fmt(it.price||0)).join("\n");
-                if (val.length > 1020) val = val.slice(0,1020) + "...";
-                embed.addFields({ name: label + " (" + fmt(cat.total) + ")", value: val, inline:false });
-              }
-            }
-          } else if (scData._source === "coflnet") {
-            // Parse sky.coflnet.com response
-            const d = scData.data;
-            if (d && (d.networth || d.unsoulbound)) {
-              parsed = true;
-              const total = d.networth || 0;
-              const unsoul = d.unsoulbound || 0;
-              embed.setTitle(mojang.name + "'s Networth");
-              embed.setDescription("**Total: " + total.toLocaleString() + " (" + fmt(total) + ")**\nUnsoulbound: " + fmt(unsoul) + "\nPurse: " + fmt(purse) + "  |  Bank: " + fmt(bank));
-              // CoflNet categories
-              const catMap = [
-                ["armor","Armor"],["inventory","Items"],["pets","Pets"],
-                ["accessories","Accessories"],["wardrobe","Wardrobe"],
-                ["enderChest","Ender Chest"],["storage","Storage"],
-              ];
-              for (const [key,label] of catMap) {
-                const val = d[key];
-                if (!val || val <= 0) continue;
-                embed.addFields({ name: label + " — " + fmt(val), value: "**" + fmt(val) + "**", inline:true });
-              }
-            }
-          }
-        } catch(e) { console.error("[NW] Parse error:", e.message); }
-      }
-
-      if (!parsed) {
-        embed.setTitle(mojang.name + "'s Networth");
-        embed.setDescription("Purse: **" + fmt(purse) + "**\nBank: **" + fmt(bank) + "**\nLiquid Total: **" + fmt(purse+bank) + "**\n\n> Item breakdown unavailable right now.\n> Full details: sky.shiiyu.moe/stats/" + mojang.name);
-      }
-      return interaction.editReply({ embeds:[embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
 
-    /* /skills */
+        /* /skills */
     if (cmd === "skills") {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
