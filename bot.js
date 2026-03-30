@@ -57,19 +57,19 @@ async function fetchMayor() {
   return r.data;
 }
 
-// SkyCrypt networth API — correct endpoint
+// SkyCrypt networth
 async function fetchNetworth(username) {
   const k = 'nw_' + username.toLowerCase();
   if (cache.has(k)) return cache.get(k);
   try {
-    const r = await axios.get(
-      'https://sky.shiiyu.moe/api/v2/profile/' + username,
-      { timeout: 15000, headers: { 'User-Agent': 'HypixelSkyblockBot/1.0', 'Accept': 'application/json' } }
-    );
+    const r = await axios.get('https://sky.shiiyu.moe/api/v2/profile/' + username, {
+      timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 SkyblockBot/1.0', 'Accept': 'application/json' }
+    });
     cache.set(k, r.data);
     return r.data;
   } catch (e) {
-    console.error('SkyCrypt error:', e.message);
+    console.log('SkyCrypt failed:', e.message);
     return null;
   }
 }
@@ -89,7 +89,7 @@ async function resolveUser(interaction) {
   if (v) return v;
   const l = linkedAccounts.get(interaction.user.id);
   if (l) return l;
-  throw new Error('No username provided!\nUse `/link <username>` to link your Minecraft account once, then all commands work without typing your name.');
+  throw new Error('No username provided!\nUse `/link <username>` to link your account once — then all commands work without typing your name.');
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -115,14 +115,14 @@ function skillLevel(xp, max) {
   return lvl;
 }
 
-// Get skill XP — handles both old and new API paths
+// Robust skill XP getter — tries all known API paths
 function getSkillXP(member, skillName) {
-  // Old API path
-  const old = member['experience_skill_' + skillName];
-  if (old && old > 0) return old;
-  // New v2 path
-  const newPath = member?.player_data?.experience?.['SKILL_' + skillName.toUpperCase()];
-  if (newPath && newPath > 0) return newPath;
+  const paths = [
+    member?.['experience_skill_' + skillName],
+    member?.player_data?.experience?.['SKILL_' + skillName.toUpperCase()],
+    member?.skills?.['SKILL_' + skillName.toUpperCase()],
+  ];
+  for (const v of paths) { if (v && v > 0) return v; }
   return 0;
 }
 
@@ -132,9 +132,10 @@ function skillAvg(member) {
 }
 
 function skillsDisabled(member) {
-  const names = ['farming','mining','combat','foraging','fishing','enchanting','alchemy','taming'];
-  return names.every(k => getSkillXP(member, k) === 0);
+  return ['farming','mining','combat'].every(k => getSkillXP(member, k) === 0);
 }
+
+// ─── SLAYER ───────────────────────────────────────────────────────────────────
 
 const SL_XP = {
   zombie:   [0,5,15,200,1000,5000,20000,100000,400000,1000000],
@@ -144,6 +145,7 @@ const SL_XP = {
   blaze:    [0,10,30,250,1500,5000,20000,100000,400000,1000000],
   vampire:  [0,20,75,240,840,2400],
 };
+
 function slayerLvl(xp, type) {
   const t = SL_XP[type] || [];
   let l = 0;
@@ -151,7 +153,21 @@ function slayerLvl(xp, type) {
   return l;
 }
 
+// Robust slayer XP getter — tries all known API v1 and v2 paths
+function getSlayerBosses(member) {
+  // v1 path
+  if (member?.slayer_bosses) return member.slayer_bosses;
+  // v2 path
+  if (member?.slayer?.slayer_bosses) return member.slayer.slayer_bosses;
+  // another possible v2 path
+  if (member?.player_stats?.slayer_bosses) return member.player_stats.slayer_bosses;
+  return {};
+}
+
+// ─── DUNGEONS ────────────────────────────────────────────────────────────────
+
 const DG_XP = [0,50,75,110,160,230,330,470,670,950,1340,1890,2665,3760,5260,7380,10300,14400,20000,27600,38000,52500,71500,97000,132000,180000,243000,328000,445000,600000,800000,1065000,1410000,1900000,2500000,3300000,4300000,5600000,7200000,9200000,12000000,15000000,19000000,24000000,30000000,38000000,48000000,60000000,75000000,93000000];
+
 function dungLvl(xp) {
   let l = 0, tot = 0;
   for (let i = 0; i < DG_XP.length; i++) {
@@ -252,7 +268,7 @@ const ACC = [
   { name:'Crooked Artifact',         tier:'Legendary', mp:16, cost:3000000,  cat:'Combat',   desc:'+10% damage to all mobs' },
 ];
 
-// ─── KUUDRA ───────────────────────────────────────────────────────────────────
+// ─── KUUDRA DATA ─────────────────────────────────────────────────────────────
 
 const TIERS = {
   basic:    { label:'Basic (T1)',    color:0x55FF55, minEHP:15000,  recCata:10,  setup:{ armor:'Any Crimson Armor (Hot quality fine)', weapon:'Midas Staff / Spirit Sceptre', pet:'Blaze Lvl 100 or Tiger', acc:'Full Talisman Bag (Common-Rare)', reforge:'Fierce Chest, Necrotic Helm, Bloody Legs/Boots', notes:'Easiest tier. 15k+ EHP and any crimson set.' }, profit:{ avgLoot:80000,   keyCost:40000   }, guide:['**Phase 1:** Sprint to supplies, ignore minions.','**Phase 2:** Dump supplies, protect builders.','**Phase 3:** Ballista stuns Kuudra, DPS weak spot.','**Phase 4:** Open paid chest.','**Tip:** Crimson Key required.'] },
@@ -280,9 +296,9 @@ const commands = [
   new SlashCommandBuilder().setName('unlink').setDescription('Unlink your Minecraft account'),
   new SlashCommandBuilder().setName('whoami').setDescription('Show your linked Minecraft account'),
   new SlashCommandBuilder().setName('stats').setDescription('View a player\'s Skyblock overview').addStringOption(uOpt),
-  new SlashCommandBuilder().setName('networth').setDescription('Full networth breakdown — armor, items, pets, accessories').addStringOption(uOpt),
+  new SlashCommandBuilder().setName('networth').setDescription('Full networth breakdown').addStringOption(uOpt),
   new SlashCommandBuilder().setName('skills').setDescription('View a player\'s skill levels').addStringOption(uOpt),
-  new SlashCommandBuilder().setName('slayer').setDescription('View a player\'s slayer boss levels').addStringOption(uOpt),
+  new SlashCommandBuilder().setName('slayer').setDescription('View a player\'s slayer boss levels with kill counts').addStringOption(uOpt),
   new SlashCommandBuilder().setName('dungeons').setDescription('View a player\'s Catacombs stats').addStringOption(uOpt),
   new SlashCommandBuilder().setName('profile').setDescription('Show a player\'s profile list').addStringOption(uOpt),
   new SlashCommandBuilder().setName('compare').setDescription('Compare two players')
@@ -330,6 +346,9 @@ const commands = [
       .addIntegerOption(o => o.setName('current_mp').setDescription('Your current MP').setMinValue(0))),
 
   new SlashCommandBuilder().setName('kuudra').setDescription('All Kuudra commands')
+    // NEW: kuudra stats — Kuudra Gang style
+    .addSubcommand(s => s.setName('stats').setDescription('Full Kuudra stats — completions, reputation, skills, MP')
+      .addStringOption(o => o.setName('username').setDescription('Minecraft username (skip if linked)').setRequired(false)))
     .addSubcommand(s => s.setName('setup').setDescription('Best gear setup for a tier')
       .addStringOption(o => o.setName('tier').setDescription('Kuudra tier').setRequired(true).addChoices(...TC)))
     .addSubcommand(s => s.setName('profit').setDescription('Profit calculator')
@@ -422,18 +441,18 @@ client.on('interactionCreate', async interaction => {
       const profile  = getActive(profiles);
       const member   = getMember(profile, mojang.id);
       if (!member) return interaction.editReply('No Skyblock data for **' + mojang.name + '**.');
-      const purse  = member.coin_purse || 0;
-      const bank   = profile.banking?.balance || 0;
-      const cataXP = member.dungeons?.dungeon_types?.catacombs?.experience || 0;
-      const sxp    = Object.values(member.slayer_bosses || {}).reduce((s, v) => s + (v.xp || 0), 0);
-      const apiOff = skillsDisabled(member);
-      const avg    = apiOff ? 'API Off' : skillAvg(member).toFixed(2);
+      const purse   = member.coin_purse || 0;
+      const bank    = profile.banking?.balance || 0;
+      const cataXP  = member.dungeons?.dungeon_types?.catacombs?.experience || 0;
+      const sl      = getSlayerBosses(member);
+      const sxp     = Object.values(sl).reduce((s, v) => s + (v.xp || 0), 0);
+      const apiOff  = skillsDisabled(member);
       return interaction.editReply({ embeds: [new EmbedBuilder()
         .setTitle(mojang.name + "'s Skyblock Stats").setColor(0x00AAFF)
         .setThumbnail('https://mc-heads.net/avatar/' + mojang.id)
         .addFields(
           { name: 'Active Profile',  value: profile.cute_name || 'Unknown',            inline: true },
-          { name: 'Skill Average',   value: avg,                                        inline: true },
+          { name: 'Skill Average',   value: apiOff ? 'API Off' : skillAvg(member).toFixed(2), inline: true },
           { name: 'Catacombs Level', value: String(dungLvl(cataXP)),                  inline: true },
           { name: 'Purse',           value: fmt(purse),                                inline: true },
           { name: 'Bank',            value: fmt(bank),                                 inline: true },
@@ -442,11 +461,11 @@ client.on('interactionCreate', async interaction => {
           { name: 'Fairy Souls',     value: String(member.fairy_souls_collected || 0), inline: true },
           { name: 'Profiles',        value: String(profiles.length),                   inline: true },
         )
-        .setFooter({ text: apiOff ? '⚠️ Skills API is disabled — player must enable it in Hypixel settings' : 'Hypixel Skyblock Bot' })
+        .setFooter({ text: apiOff ? '⚠️ Skills API disabled — player must enable in Hypixel settings' : 'Hypixel Skyblock Bot' })
         .setTimestamp()] });
     }
 
-    // /networth — Sky Miner style
+    // /networth
     if (cmd === 'networth') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
@@ -456,11 +475,11 @@ client.on('interactionCreate', async interaction => {
         fetchNetworth(mojang.name),
       ]);
 
-      const profile = getActive(profiles);
-      const member  = getMember(profile, mojang.id);
-      const purse   = member ? (member.coin_purse || 0) : 0;
-      const bank    = profile ? (profile.banking?.balance || 0) : 0;
-      const profileName = profile ? (profile.cute_name || 'Unknown') : 'Unknown';
+      const profile     = getActive(profiles);
+      const member      = getMember(profile, mojang.id);
+      const purse       = member ? (member.coin_purse || 0) : 0;
+      const bank        = profile ? (profile.banking?.balance || 0) : 0;
+      const profileName = profile?.cute_name || 'Unknown';
 
       const embed = new EmbedBuilder()
         .setColor(0xFFD700)
@@ -472,94 +491,76 @@ client.on('interactionCreate', async interaction => {
 
       if (scData) {
         try {
-          const profilesData = scData.profiles || {};
-          const profileKeys  = Object.keys(profilesData);
+          const profilesObj = scData.profiles || {};
+          const keys = Object.keys(profilesObj);
+          let apData = null;
 
-          // Find active profile — try multiple possible indicators
-          let activePData = null;
-          let activePName = profileName;
-
-          for (const key of profileKeys) {
-            const p = profilesData[key];
-            if (p.current === true || p.selected === true || p.current === 'true') {
-              activePData = p;
-              activePName = key;
-              break;
+          // Try all possible ways to find the active profile
+          for (const key of keys) {
+            const p = profilesObj[key];
+            if (p.current === true || p.selected === true) { apData = p; break; }
+          }
+          // Match by cute name
+          if (!apData) {
+            for (const key of keys) {
+              if (key.toLowerCase() === profileName.toLowerCase()) { apData = profilesObj[key]; break; }
             }
           }
-          // Fallback — match by profile cute name
-          if (!activePData && profileKeys.includes(profileName)) {
-            activePData = profilesData[profileName];
-            activePName = profileName;
-          }
-          // Last fallback — first profile
-          if (!activePData && profileKeys.length > 0) {
-            activePName = profileKeys[0];
-            activePData = profilesData[activePName];
-          }
+          // Fallback to first
+          if (!apData && keys.length) apData = profilesObj[keys[0]];
 
-          const nw = activePData?.data?.networth;
+          const nw = apData?.data?.networth;
 
-          if (nw && nw.networth != null) {
+          if (nw != null) {
             parsed = true;
             const total  = nw.networth    || 0;
             const unsoul = nw.unsoulbound || 0;
             const cats   = nw.categories  || {};
 
-            embed.setTitle(mojang.name + "'s Networth on " + activePName);
+            embed.setTitle(mojang.name + "'s Networth on " + profileName);
             embed.setDescription(
-              '**Networth: ' + total.toLocaleString() + ' (' + fmt(total) + ')**\n' +
-              '🔓 Unsoulbound: ' + fmt(unsoul) + '\n\n' +
-              '💰 **Purse:** ' + fmt(purse) + '\n' +
-              '🏦 **Bank:** ' + fmt(bank)
+              '💎 **Total: ' + total.toLocaleString() + ' (' + fmt(total) + ')**\n' +
+              '🔓 Unsoulbound: ' + fmt(unsoul) + '\n' +
+              '💵 Purse: ' + fmt(purse) + '  |  🏦 Bank: ' + fmt(bank)
             );
 
-            // Category breakdown — Sky Miner style with items
             const catConfig = [
-              { key: 'armor',       label: '🛡️ Armor'       },
-              { key: 'inventory',   label: '🎒 Items'        },
-              { key: 'pets',        label: '🐾 Pets'         },
-              { key: 'accessories', label: '💍 Accessories'  },
-              { key: 'wardrobe',    label: '👔 Wardrobe'     },
-              { key: 'ender_chest', label: '📦 Ender Chest'  },
-              { key: 'storage',     label: '🗄️ Storage'      },
-              { key: 'museum',      label: '🏛️ Museum'       },
-              { key: 'sacks',       label: '🧺 Sacks'        },
+              { key:'armor',       label:'🛡️ Armor'       },
+              { key:'inventory',   label:'🎒 Items'        },
+              { key:'pets',        label:'🐾 Pets'         },
+              { key:'accessories', label:'💍 Accessories'  },
+              { key:'wardrobe',    label:'👔 Wardrobe'     },
+              { key:'ender_chest', label:'📦 Ender Chest'  },
+              { key:'storage',     label:'🗄️ Storage'      },
+              { key:'museum',      label:'🏛️ Museum'       },
+              { key:'sacks',       label:'🧺 Sacks'        },
             ];
 
             for (const { key, label } of catConfig) {
               const cat = cats[key];
-              if (!cat || !cat.total || cat.total <= 0) continue;
-
+              if (!cat || !(cat.total > 0)) continue;
               const items = (cat.items || [])
                 .sort((a, b) => (b.price || 0) - (a.price || 0))
-                .slice(0, 5);
-
-              let val = '**Total: ' + fmt(cat.total) + '**';
-              if (items.length > 0) {
-                val += '\n' + items.map(it => '• ' + (it.name || 'Unknown') + ' (' + fmt(it.price || 0) + ')').join('\n');
-              }
-
-              // Discord embed field value max 1024 chars
-              if (val.length > 1020) val = val.slice(0, 1020) + '...';
-
-              embed.addFields({ name: label + ' (' + fmt(cat.total) + ')', value: val, inline: false });
+                .slice(0, 4);
+              let val = '**' + fmt(cat.total) + '**';
+              if (items.length) val += '\n' + items.map(it => '• ' + (it.name || '?') + ' (' + fmt(it.price || 0) + ')').join('\n');
+              if (val.length > 1020) val = val.slice(0, 1020) + '…';
+              embed.addFields({ name: label + ' — ' + fmt(cat.total), value: val, inline: false });
             }
           }
-        } catch (parseErr) {
-          console.error('SkyCrypt parse error:', parseErr.message);
+        } catch (e) {
+          console.error('SkyCrypt parse:', e.message);
         }
       }
 
-      // Fallback if SkyCrypt failed
       if (!parsed) {
         embed.setTitle(mojang.name + "'s Networth");
         embed.setDescription(
-          '💰 **Purse:** ' + fmt(purse) + '\n' +
+          '💵 **Purse:** ' + fmt(purse) + '\n' +
           '🏦 **Bank:** ' + fmt(bank) + '\n' +
           '💎 **Total Liquid:** ' + fmt(purse + bank) + '\n\n' +
-          '> SkyCrypt data unavailable right now.\n' +
-          '> Full breakdown: [sky.shiiyu.moe/stats/' + mojang.name + '](https://sky.shiiyu.moe/stats/' + mojang.name + ')'
+          '> Item breakdown temporarily unavailable.\n' +
+          '> Full details: [sky.shiiyu.moe/stats/' + mojang.name + '](https://sky.shiiyu.moe/stats/' + mojang.name + ')'
         );
       }
 
@@ -572,23 +573,17 @@ client.on('interactionCreate', async interaction => {
       const mojang   = await fetchMojang(username);
       const profiles = await fetchProfiles(mojang.id);
       const member   = getMember(getActive(profiles), mojang.id);
-      if (!member) return interaction.editReply('No Skyblock data found for **' + mojang.name + '**.');
+      if (!member) return interaction.editReply('No Skyblock data for **' + mojang.name + '**.');
 
-      const apiOff = skillsDisabled(member);
-
-      if (apiOff) {
+      if (skillsDisabled(member)) {
         return interaction.editReply({ embeds: [new EmbedBuilder()
           .setTitle(mojang.name + "'s Skills — API Disabled").setColor(0xFF8800)
           .setThumbnail('https://mc-heads.net/avatar/' + mojang.id)
           .setDescription(
             '⚠️ **' + mojang.name + ' has their Skills API turned off.**\n\n' +
-            'To fix this, they need to:\n' +
-            '1. Join **Hypixel** server in Minecraft\n' +
-            '2. Type `/api` in chat\n' +
-            '3. Enable **Skills** in the API settings\n\n' +
-            'Until then, skill data cannot be displayed.'
-          )
-          .setTimestamp()] });
+            'To fix: Join Hypixel → type `/api` → enable **Skills API**\n\n' +
+            'Until then, skill data cannot be shown.'
+          ).setTimestamp()] });
       }
 
       const list = [
@@ -610,30 +605,61 @@ client.on('interactionCreate', async interaction => {
         .setTimestamp()] });
     }
 
-    // /slayer
+    // /slayer — FIXED with robust path detection + kill counts
     if (cmd === 'slayer') {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
       const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
       if (!member) return interaction.editReply('No Skyblock data found.');
+
+      const sl = getSlayerBosses(member);
+
+      console.log('Slayer data path check:', JSON.stringify(Object.keys(sl)));
+
       const bosses = [
-        ['zombie','Revenant Horror',9],['spider','Tarantula Broodfather',9],
-        ['wolf','Sven Packmaster',9],['enderman','Voidgloom Seraph',9],
-        ['blaze','Inferno Demonlord',9],['vampire','Riftstalker Bloodfiend',5],
+        { key:'zombie',   name:'Revenant Horror',       maxLvl:9 },
+        { key:'spider',   name:'Tarantula Broodfather', maxLvl:9 },
+        { key:'wolf',     name:'Sven Packmaster',       maxLvl:9 },
+        { key:'enderman', name:'Voidgloom Seraph',      maxLvl:9 },
+        { key:'blaze',    name:'Inferno Demonlord',     maxLvl:9 },
+        { key:'vampire',  name:'Riftstalker Bloodfiend',maxLvl:5 },
       ];
-      const sl = member.slayer_bosses || {};
+
       let totalXP = 0;
-      const lines = bosses.map(([k, name, max]) => {
-        const xp  = sl[k]?.xp || 0; totalXP += xp;
-        const lvl = slayerLvl(xp, k);
-        const bar = '█'.repeat(Math.round(lvl / max * 10)) + '░'.repeat(10 - Math.round(lvl / max * 10));
-        return '**' + name + '** — Lvl **' + lvl + '**/' + max + ' `' + bar + '` ' + fmt(xp) + ' XP';
+      const lines = bosses.map(({ key, name, maxLvl }) => {
+        const bossData = sl[key] || {};
+        const xp  = bossData.xp || 0;
+        totalXP  += xp;
+        const lvl = slayerLvl(xp, key);
+        const bar = '█'.repeat(Math.round(lvl / maxLvl * 10)) + '░'.repeat(10 - Math.round(lvl / maxLvl * 10));
+
+        // Kill counts per tier
+        const kills = bossData.boss_kills_tier_0 != null
+          ? [
+              bossData.boss_kills_tier_0 || 0,
+              bossData.boss_kills_tier_1 || 0,
+              bossData.boss_kills_tier_2 || 0,
+              bossData.boss_kills_tier_3 || 0,
+              bossData.boss_kills_tier_4 || 0,
+            ].filter((_, i) => i < maxLvl)
+          : null;
+
+        let line = '**' + name + '** — Lvl **' + lvl + '**/' + maxLvl + ' `' + bar + '` ' + fmt(xp) + ' XP';
+        if (kills) {
+          const killStr = kills.map((k, i) => 'T' + (i + 1) + ': ' + k).filter(s => !s.endsWith(': 0')).join(' | ');
+          if (killStr) line += '\n  ' + killStr;
+        }
+        return line;
       });
+
+      const noData = totalXP === 0;
+
       return interaction.editReply({ embeds: [new EmbedBuilder()
-        .setTitle(mojang.name + "'s Slayer Levels").setColor(0xFF4444)
+        .setTitle(mojang.name + "'s Slayer Levels").setColor(noData ? 0xFF8800 : 0xFF4444)
         .setThumbnail('https://mc-heads.net/avatar/' + mojang.id)
-        .setDescription(lines.join('\n'))
+        .setDescription(lines.join('\n\n'))
         .addFields({ name: 'Total Slayer XP', value: fmt(totalXP), inline: false })
+        .setFooter({ text: noData ? '⚠️ All 0 — player may not have started slayer, or data unavailable' : 'Hypixel Skyblock Bot' })
         .setTimestamp()] });
     }
 
@@ -667,10 +693,10 @@ client.on('interactionCreate', async interaction => {
       const profiles = await fetchProfiles(mojang.id);
       if (!profiles?.length) return interaction.editReply('No profiles found.');
       const lines = profiles.map((p, i) => {
-        const m   = getMember(p, mojang.id);
+        const m      = getMember(p, mojang.id);
         const apiOff = m ? skillsDisabled(m) : true;
-        const avg = m && !apiOff ? skillAvg(m).toFixed(1) : 'API Off';
-        const cat = dungLvl(m?.dungeons?.dungeon_types?.catacombs?.experience || 0);
+        const avg    = m && !apiOff ? skillAvg(m).toFixed(1) : 'API Off';
+        const cat    = dungLvl(m?.dungeons?.dungeon_types?.catacombs?.experience || 0);
         return (i + 1) + '. **' + p.cute_name + '**' + (p.selected ? ' (Active)' : '') + '\nSkill Avg: ' + avg + ' | Cata: ' + cat;
       });
       return interaction.editReply({ embeds: [new EmbedBuilder()
@@ -690,12 +716,13 @@ client.on('interactionCreate', async interaction => {
       const mm2 = getMember(getActive(p2), m2.id);
       if (!mm1 || !mm2) return interaction.editReply('Could not find data for one or both players.');
       const api1 = skillsDisabled(mm1), api2 = skillsDisabled(mm2);
-      const a1 = api1 ? 0 : skillAvg(mm1), a2 = api2 ? 0 : skillAvg(mm2);
-      const c1 = dungLvl(mm1.dungeons?.dungeon_types?.catacombs?.experience || 0);
-      const c2 = dungLvl(mm2.dungeons?.dungeon_types?.catacombs?.experience || 0);
-      const s1 = Object.values(mm1.slayer_bosses || {}).reduce((s, v) => s + (v.xp || 0), 0);
-      const s2 = Object.values(mm2.slayer_bosses || {}).reduce((s, v) => s + (v.xp || 0), 0);
-      const w  = (a, b) => a > b ? ' WIN' : a < b ? ' LOSS' : ' TIE';
+      const a1   = api1 ? 0 : skillAvg(mm1), a2 = api2 ? 0 : skillAvg(mm2);
+      const c1   = dungLvl(mm1.dungeons?.dungeon_types?.catacombs?.experience || 0);
+      const c2   = dungLvl(mm2.dungeons?.dungeon_types?.catacombs?.experience || 0);
+      const sl1  = getSlayerBosses(mm1), sl2 = getSlayerBosses(mm2);
+      const s1   = Object.values(sl1).reduce((s, v) => s + (v.xp || 0), 0);
+      const s2   = Object.values(sl2).reduce((s, v) => s + (v.xp || 0), 0);
+      const w    = (a, b) => a > b ? ' WIN' : a < b ? ' LOSS' : ' TIE';
       return interaction.editReply({ embeds: [new EmbedBuilder()
         .setTitle(m1.name + ' vs ' + m2.name).setColor(0xAA00FF)
         .addFields(
@@ -763,11 +790,11 @@ client.on('interactionCreate', async interaction => {
         .setTitle('Hypixel Skyblock Bot — All Commands').setColor(0x00FFFF)
         .setDescription('> **Start here:** Type `/link <yourIGN>` once — then all commands work without typing your name!')
         .addFields(
-          { name: '🔗 Linking',     value: '/link\n/unlink\n/whoami',                                                                                    inline: true  },
-          { name: '📊 Stats',       value: '/stats\n/networth\n/skills\n/slayer\n/dungeons\n/profile\n/compare',                                          inline: true  },
-          { name: '🏪 Economy',     value: '/bazaar\n/auction\n/mayor',                                                                                   inline: true  },
-          { name: '💍 Accessories', value: '/accessories budget — Budget planner with MP target\n/accessories milestones — All MP bonuses\n/accessories list\n/accessories upgrade', inline: false },
-          { name: '🔥 Kuudra',      value: '/kuudra setup\n/kuudra profit\n/kuudra requirements\n/kuudra lfg\n/kuudra parties\n/kuudra guide\n/kuudra tiers', inline: false },
+          { name: '🔗 Linking',     value: '/link\n/unlink\n/whoami',                               inline: true  },
+          { name: '📊 Stats',       value: '/stats\n/networth\n/skills\n/slayer\n/dungeons\n/profile\n/compare', inline: true },
+          { name: '🏪 Economy',     value: '/bazaar\n/auction\n/mayor',                              inline: true  },
+          { name: '💍 Accessories', value: '/accessories budget\n/accessories milestones\n/accessories list\n/accessories upgrade', inline: false },
+          { name: '🔥 Kuudra',      value: '/kuudra **stats** — Full Kuudra Gang style stats\n/kuudra setup\n/kuudra profit\n/kuudra requirements\n/kuudra lfg\n/kuudra parties\n/kuudra guide\n/kuudra tiers', inline: false },
         ).setFooter({ text: 'Hypixel Skyblock Bot' }).setTimestamp()] });
     }
 
@@ -785,8 +812,7 @@ client.on('interactionCreate', async interaction => {
         const gCats     = { combat:['Combat'], dungeons:['Dungeons','Combat','Defense'], allround:['Combat','Defense','Utility','Speed'], speed:['Speed','Utility'], gathering:['Mining','Farming','Fishing','Utility'] };
         const wanted    = gCats[goal] || [];
 
-        const sortedAcc = ACC
-          .filter(a => tOrder.indexOf(a.tier) <= maxIdx)
+        const sortedAcc = ACC.filter(a => tOrder.indexOf(a.tier) <= maxIdx)
           .map(a => ({ ...a, pri: wanted.includes(a.cat) ? 1 : 2, mppc: a.mp / a.cost }))
           .sort((a, b) => a.pri - b.pri || b.mppc - a.mppc);
 
@@ -801,12 +827,11 @@ client.on('interactionCreate', async interaction => {
 
         if (!bought.length) return interaction.editReply('Budget of **' + fmt(budget) + '** is too low. Cheapest accessory is ~1,000 coins.');
 
-        const reached = currentMP + gained;
+        const reached       = currentMP + gained;
         const reachedTarget = targetMP ? gained >= needMP : true;
-        const hittable = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= reached);
-        const nextMs   = MP_MILESTONES.filter(m => m.mp > reached).slice(0, 3);
-
-        const byCat = {};
+        const hittable      = MP_MILESTONES.filter(m => m.mp > currentMP && m.mp <= reached);
+        const nextMs        = MP_MILESTONES.filter(m => m.mp > reached).slice(0, 3);
+        const byCat         = {};
         bought.forEach(a => { if (!byCat[a.cat]) byCat[a.cat] = []; byCat[a.cat].push(a); });
 
         const embed = new EmbedBuilder()
@@ -819,15 +844,15 @@ client.on('interactionCreate', async interaction => {
             (targetMP && !reachedTarget ? '\n⚠️ Cannot fully reach **' + targetMP + ' MP** within budget.' : '')
           );
 
-        if (hittable.length) embed.addFields({ name: '🎉 Milestones You\'ll Unlock', value: hittable.map(m => '**' + m.mp + ' MP** — ' + m.bonus).join('\n'), inline: false });
-        if (nextMs.length)   embed.addFields({ name: '🎯 Next Milestones', value: nextMs.map(m => '**' + m.mp + ' MP** (need +' + (m.mp - reached) + ' more) — ' + m.bonus).join('\n'), inline: false });
+        if (hittable.length) embed.addFields({ name: '🎉 Milestones Unlocked', value: hittable.map(m => '**' + m.mp + ' MP** — ' + m.bonus).join('\n'), inline: false });
+        if (nextMs.length)   embed.addFields({ name: '🎯 Next Milestones',     value: nextMs.map(m => '**' + m.mp + ' MP** (need +' + (m.mp - reached) + ') — ' + m.bonus).join('\n'), inline: false });
 
         Object.entries(byCat).slice(0, 4).forEach(([cat, items]) => {
           const lines = items.slice(0, 5).map(a => '• **' + a.name + '** — ' + fmt(a.cost) + ' (+' + a.mp + ' MP)').join('\n');
           embed.addFields({ name: cat + ' (' + items.length + ')', value: lines + (items.length > 5 ? '\n_+' + (items.length - 5) + ' more_' : ''), inline: false });
         });
 
-        embed.addFields({ name: '💡 Tips', value: '• Reforge Warped Stone = best MP bonus\n• Recombobulate Legendary accessories\n• `/accessories milestones` to see all MP bonuses', inline: false }).setTimestamp();
+        embed.addFields({ name: '💡 Tips', value: '• Warped Stone reforge = best MP bonus\n• Recombobulate Legendary accessories\n• `/accessories milestones` to see all MP bonuses', inline: false }).setTimestamp();
         return interaction.editReply({ embeds: [embed] });
       }
 
@@ -835,20 +860,20 @@ client.on('interactionCreate', async interaction => {
         const total = ACC.reduce((s, a) => s + a.mp, 0);
         return interaction.editReply({ embeds: [new EmbedBuilder()
           .setTitle('✨ Magic Power Milestones').setColor(0xFFAA00)
-          .setDescription('Each milestone = permanent stat bonus.\nMax possible MP: **' + total + ' MP**\n\n' + MP_MILESTONES.map(m => '**' + m.mp + ' MP** — ' + m.bonus).join('\n'))
-          .addFields({ name: 'How to gain MP fast', value: '• Buy more accessories\n• Reforge **Warped Stone** for extra MP\n• Recombobulate Legendary accessories\n• Use `/accessories budget` to plan', inline: false })
+          .setDescription('Max possible MP: **' + total + ' MP**\n\n' + MP_MILESTONES.map(m => '**' + m.mp + ' MP** — ' + m.bonus).join('\n'))
+          .addFields({ name: 'How to gain MP fast', value: '• Buy more accessories\n• Reforge **Warped Stone**\n• Recombobulate Legendary\n• Use `/accessories budget` to plan', inline: false })
           .setTimestamp()] });
       }
 
       if (sub === 'list') {
         const cat      = interaction.options.getString('category');
         const filtered = cat ? ACC.filter(a => a.cat === cat) : ACC.slice(0, 30);
-        if (!filtered.length) return interaction.editReply('No accessories found for that category.');
+        if (!filtered.length) return interaction.editReply('No accessories found.');
         const grouped = {};
         filtered.forEach(a => { if (!grouped[a.tier]) grouped[a.tier] = []; grouped[a.tier].push(a); });
         const embed = new EmbedBuilder().setTitle('💍 Accessories — ' + (cat || 'All')).setColor(0x00FFFF).setTimestamp();
         ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'].forEach(tier => {
-          if (!grouped[tier] || grouped[tier].length === 0) return;
+          if (!grouped[tier] || !grouped[tier].length) return;
           const lines = grouped[tier].map(a => '• **' + a.name + '** — ' + fmt(a.cost) + ' | +' + a.mp + ' MP | ' + a.desc).join('\n');
           embed.addFields({ name: tier + ' (' + grouped[tier].length + ')', value: lines.slice(0, 1000), inline: false });
         });
@@ -868,11 +893,11 @@ client.on('interactionCreate', async interaction => {
         const lines    = bought.slice(0, 12).map((a, i) => (i + 1) + '. **' + a.name + '** [' + a.tier + '] — ' + fmt(a.cost) + ' | +' + a.mp + ' MP').join('\n');
         const embed = new EmbedBuilder()
           .setTitle('⚡ Best MP/Coin Picks for ' + fmt(budget)).setColor(0xAA00FF)
-          .setDescription('✨ Total MP: **+' + totalMP + '**' + (currentMP ? ' (' + currentMP + ' → **' + reached + '**)' : '') + '\n💰 Spent: **' + fmt(budget - rem) + '** | Left: **' + fmt(rem) + '**\n📦 **' + bought.length + '** accessories')
+          .setDescription('✨ MP gain: **+' + totalMP + '**' + (currentMP ? ' (' + currentMP + ' → **' + reached + '**)' : '') + '\n💰 Spent: **' + fmt(budget - rem) + '** | Left: **' + fmt(rem) + '**\n📦 **' + bought.length + '** accessories')
           .addFields({ name: 'Top Picks', value: lines || 'None found', inline: false });
         if (hittable.length) embed.addFields({ name: '🎉 Milestones Unlocked', value: hittable.map(m => '**' + m.mp + ' MP** — ' + m.bonus).join('\n'), inline: false });
-        if (next.length)     embed.addFields({ name: '🎯 Next Milestones', value: next.map(m => '**' + m.mp + ' MP** (need +' + (m.mp - reached) + ' more) — ' + m.bonus).join('\n'), inline: false });
-        embed.addFields({ name: 'Tips', value: '• Warped Stone = best MP reforge\n• Recombobulate Legendary\n• `/accessories budget` for goal-based plan', inline: false }).setTimestamp();
+        if (next.length)     embed.addFields({ name: '🎯 Next Milestones',     value: next.map(m => '**' + m.mp + ' MP** (need +' + (m.mp - reached) + ') — ' + m.bonus).join('\n'), inline: false });
+        embed.addFields({ name: 'Tips', value: '• Warped Stone = best MP reforge\n• Recombobulate Legendary\n• `/accessories budget` for goal plan', inline: false }).setTimestamp();
         return interaction.editReply({ embeds: [embed] });
       }
     }
@@ -880,6 +905,118 @@ client.on('interactionCreate', async interaction => {
     // /kuudra
     if (cmd === 'kuudra') {
 
+      // ── /kuudra stats — Kuudra Gang style ─────────────────────────────────
+      if (sub === 'stats') {
+        const username = await resolveUser(interaction);
+        const mojang   = await fetchMojang(username);
+        const profiles = await fetchProfiles(mojang.id);
+        const profile  = getActive(profiles);
+        const member   = getMember(profile, mojang.id);
+        if (!member) return interaction.editReply('No Skyblock data for **' + mojang.name + '**.');
+
+        const profileName = profile?.cute_name || 'Unknown';
+
+        // Kuudra completions
+        const kuudra = member.nether_island_player_data?.kuudra_completed_tiers || {};
+        const basic    = kuudra.none     || 0;
+        const hot      = kuudra.hot      || 0;
+        const burning  = kuudra.burning  || 0;
+        const fiery    = kuudra.fiery    || 0;
+        const infernal = kuudra.infernal || 0;
+        const totalRuns = basic + hot + burning + fiery + infernal;
+
+        // Reputation
+        const magesRep  = member.nether_island_player_data?.mages_reputation     || 0;
+        const barbsRep  = member.nether_island_player_data?.barbarians_reputation || 0;
+
+        // Magical Power
+        const magicalPower = member.accessory_bag_storage?.highest_magical_power
+          || member.player_data?.reforge_bonuses?.length
+          || 0;
+
+        // Skills
+        const cataXP   = member.dungeons?.dungeon_types?.catacombs?.experience || 0;
+        const cataLvl  = dungLvl(cataXP);
+        const apiOff   = skillsDisabled(member);
+        const combatLvl= apiOff ? '?' : skillLevel(getSkillXP(member, 'combat'));
+        const avgSkill = apiOff ? '?' : skillAvg(member).toFixed(1);
+
+        // Slayer
+        const sl = getSlayerBosses(member);
+        const zombieLvl  = slayerLvl(sl.zombie?.xp   || 0, 'zombie');
+        const spiderLvl  = slayerLvl(sl.spider?.xp   || 0, 'spider');
+        const wolfLvl    = slayerLvl(sl.wolf?.xp     || 0, 'wolf');
+        const enderLvl   = slayerLvl(sl.enderman?.xp || 0, 'enderman');
+        const blazeLvl   = slayerLvl(sl.blaze?.xp    || 0, 'blaze');
+        const vampireLvl = slayerLvl(sl.vampire?.xp  || 0, 'vampire');
+
+        // Coin purse + bank
+        const purse = member.coin_purse || 0;
+        const bank  = profile.banking?.balance || 0;
+
+        const embed = new EmbedBuilder()
+          .setTitle('🔥 Kuudra Stats for ' + mojang.name + ' on ' + profileName)
+          .setColor(0xFF6600)
+          .setThumbnail('https://mc-heads.net/avatar/' + mojang.id)
+          .addFields(
+            // Completions
+            {
+              name: '🏆 Kuudra Completions (' + totalRuns + ' total)',
+              value: [
+                '**' + basic + '** Basic  |  **' + hot + '** Hot  |  **' + burning + '** Burning',
+                '**' + fiery + '** Fiery  |  **' + infernal + '** Infernal',
+              ].join('\n'),
+              inline: false,
+            },
+            // Reputation
+            {
+              name: '⚖️ Reputation',
+              value: '🟣 **Mages:** ' + fmt(magesRep) + '\n🟠 **Barbarians:** ' + fmt(barbsRep),
+              inline: true,
+            },
+            // Magical Power
+            {
+              name: '✨ Magical Power',
+              value: magicalPower > 0 ? '**' + magicalPower + '**' : 'N/A (check in-game)',
+              inline: true,
+            },
+            // Skills
+            {
+              name: '📚 Skills',
+              value: [
+                'Cata: **' + cataLvl + '**',
+                'Combat: **' + combatLvl + '**',
+                'Skill Avg: **' + avgSkill + '**',
+              ].join('  |  '),
+              inline: false,
+            },
+            // Slayer
+            {
+              name: '⚔️ Slayer Levels',
+              value: [
+                '🧟 Rev **' + zombieLvl + '**',
+                '🕷️ Tara **' + spiderLvl + '**',
+                '🐺 Sven **' + wolfLvl + '**',
+                '👁️ Ender **' + enderLvl + '**',
+                '🔥 Blaze **' + blazeLvl + '**',
+                '🧛 Vamp **' + vampireLvl + '**',
+              ].join('  '),
+              inline: false,
+            },
+            // Coins
+            {
+              name: '💰 Coins',
+              value: 'Purse: **' + fmt(purse) + '**  |  Bank: **' + fmt(bank) + '**',
+              inline: false,
+            },
+          )
+          .setFooter({ text: apiOff ? '⚠️ Skills API disabled — some data unavailable' : 'Hypixel Skyblock Bot' })
+          .setTimestamp();
+
+        return interaction.editReply({ embeds: [embed] });
+      }
+
+      // ── /kuudra setup ──────────────────────────────────────────────────────
       if (sub === 'setup') {
         const d = TIERS[interaction.options.getString('tier')];
         return interaction.editReply({ embeds: [new EmbedBuilder()
@@ -896,6 +1033,7 @@ client.on('interactionCreate', async interaction => {
           ).setTimestamp()] });
       }
 
+      // ── /kuudra profit ─────────────────────────────────────────────────────
       if (sub === 'profit') {
         const d    = TIERS[interaction.options.getString('tier')];
         const runs = interaction.options.getInteger('runs') || 1;
@@ -912,108 +1050,3 @@ client.on('interactionCreate', async interaction => {
             { name: 'Total Keys', value: fmt(keys),                  inline: true },
             { name: 'Net Profit', value: '**' + fmt(net) + '** coins', inline: true },
             { name: 'Est/Hour',   value: '~' + fmt(net * 4) + ' coins', inline: false },
-          ).setTimestamp()] });
-      }
-
-      if (sub === 'requirements') {
-        const tier     = interaction.options.getString('tier');
-        const d        = TIERS[tier];
-        const username = await resolveUser(interaction);
-        const mojang   = await fetchMojang(username);
-        const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
-        if (!member) return interaction.editReply('No Skyblock data found.');
-        const hp   = member.stats?.health  || 100;
-        const def  = member.stats?.defense || 0;
-        const ehp  = Math.round(hp * (1 + def / 100));
-        const cata = dungLvl(member.dungeons?.dungeon_types?.catacombs?.experience || 0);
-        const avg  = skillsDisabled(member) ? 0 : skillAvg(member);
-        const ok1  = ehp >= d.minEHP, ok2 = cata >= d.recCata, ok3 = avg >= 30;
-        const all  = ok1 && ok2 && ok3;
-        const t    = v => v ? '✅ YES' : '❌ NO';
-        return interaction.editReply({ embeds: [new EmbedBuilder()
-          .setTitle(mojang.name + ' — ' + d.label + ' Readiness').setColor(all ? 0x00FF44 : 0xFF4400)
-          .setThumbnail('https://mc-heads.net/avatar/' + mojang.id)
-          .addFields(
-            { name: 'EHP (est.) — ' + t(ok1), value: fmt(ehp) + ' / ' + fmt(d.minEHP) + ' required',              inline: false },
-            { name: 'Catacombs — '  + t(ok2), value: cata + ' / ' + d.recCata + ' recommended',                    inline: true  },
-            { name: 'Skill Avg — '  + t(ok3), value: (skillsDisabled(member) ? 'API Off' : avg.toFixed(1)) + ' / 30 recommended', inline: true },
-            { name: 'Verdict', value: all ? '✅ **READY for ' + d.label + '!**' : '❌ Not ready. Improve stats marked NO.', inline: false },
-          ).setTimestamp()] });
-      }
-
-      if (sub === 'lfg') {
-        const tier = interaction.options.getString('tier');
-        const role = interaction.options.getString('role');
-        const note = interaction.options.getString('note') || 'No additional info';
-        const d    = TIERS[tier];
-        const gid  = interaction.guildId;
-        if (!lfgStore.has(gid)) lfgStore.set(gid, []);
-        const list = lfgStore.get(gid).filter(e => e.userId !== interaction.user.id);
-        list.push({ userId: interaction.user.id, tag: interaction.user.tag, tier, role, note, ts: Date.now() });
-        lfgStore.set(gid, list);
-        return interaction.editReply({ embeds: [new EmbedBuilder()
-          .setTitle('LFG — Kuudra ' + d.label).setColor(d.color)
-          .setDescription('<@' + interaction.user.id + '> is looking for a Kuudra group!')
-          .addFields(
-            { name: 'Role', value: role,    inline: true },
-            { name: 'Tier', value: d.label, inline: true },
-            { name: 'Note', value: note,    inline: false },
-          ).setFooter({ text: 'Use /kuudra parties to see all. Expires 30 min.' }).setTimestamp()] });
-      }
-
-      if (sub === 'parties') {
-        const tf  = interaction.options.getString('tier') || 'all';
-        const gid = interaction.guildId;
-        const now = Date.now();
-        const fresh    = (lfgStore.get(gid) || []).filter(e => now - e.ts < 30 * 60000);
-        lfgStore.set(gid, fresh);
-        const filtered = tf === 'all' ? fresh : fresh.filter(e => e.tier === tf);
-        if (!filtered.length) return interaction.editReply('No active LFG parties. Post one with `/kuudra lfg`!');
-        const embed = new EmbedBuilder()
-          .setTitle('Active LFG' + (tf !== 'all' ? ' — ' + TIERS[tf].label : ' — All')).setColor(0xFF6600).setTimestamp();
-        filtered.slice(0, 10).forEach(e => embed.addFields({
-          name:  TIERS[e.tier].label + ' — ' + e.role,
-          value: '<@' + e.userId + '> (' + e.tag + ')\n' + e.note + '\n' + Math.round((now - e.ts) / 60000) + 'm ago',
-          inline: false,
-        }));
-        return interaction.editReply({ embeds: [embed] });
-      }
-
-      if (sub === 'guide') {
-        const tier = interaction.options.getString('tier');
-        if (tier) {
-          const d = TIERS[tier];
-          return interaction.editReply({ embeds: [new EmbedBuilder()
-            .setTitle('Kuudra ' + d.label + ' — Guide').setColor(d.color)
-            .setDescription(d.guide.join('\n\n')).setTimestamp()] });
-        }
-        return interaction.editReply({ embeds: [new EmbedBuilder()
-          .setTitle('Kuudra — General Guide').setColor(0xFF6600)
-          .addFields(
-            { name: 'Overview', value: '4-player co-op boss on Crimson Isle. 5 tiers: Basic to Infernal.',                                              inline: false },
-            { name: 'Roles',    value: 'Mage — Staff DPS\nBerserk — Melee\nArcher — Ranged\nTank — Absorption\nHealer — Support',                      inline: false },
-            { name: '4 Phases', value: '1. Supply Run\n2. Build + Defend\n3. Ballista + Fight Kuudra\n4. Open Paid Chest',                              inline: false },
-            { name: 'Pro Tips', value: 'Always open Paid Chest | Attribute Shards best drops\nGod Pots for Fiery+ | Coordinate roles before starting',  inline: false },
-          ).setTimestamp()] });
-      }
-
-      if (sub === 'tiers') {
-        const embed = new EmbedBuilder().setTitle('Kuudra — All Tiers').setColor(0xFF6600).setTimestamp();
-        Object.entries(TIERS).forEach(([k, d]) => embed.addFields({
-          name:  d.label,
-          value: 'Profit: **' + fmt(d.profit.avgLoot - d.profit.keyCost) + '**/run | Min EHP: **' + fmt(d.minEHP) + '** | Cata: **' + d.recCata + '+**',
-          inline: false,
-        }));
-        return interaction.editReply({ embeds: [embed] });
-      }
-    }
-
-  } catch (err) {
-    console.error('Error in /' + interaction.commandName + ':', err.message);
-    try {
-      await interaction.editReply('❌ ' + (err.message || 'Unknown error occurred.'));
-    } catch (_) {}
-  }
-});
-
-client.login(DISCORD_TOKEN);
