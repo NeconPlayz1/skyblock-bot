@@ -482,68 +482,123 @@ client.on("interactionCreate", async interaction => {
       const profile  = getActive(profiles);
       const member   = getMember(profile, mojang.id);
       if (!member) return interaction.editReply("No Skyblock data for **"+mojang.name+"**.");
-      const purse=member.coin_purse||0, bank=profile.banking?.balance||0;
-      const cataXP=member.dungeons?.dungeon_types?.catacombs?.experience||0;
-      const sl=getSlayerBosses(member), sxp=Object.values(sl).reduce((s,v)=>s+(v.xp||0),0);
-      const apiOff=skillsDisabled(member);
-      return interaction.editReply({ embeds:[new EmbedBuilder().setTitle(mojang.name+"'s Skyblock Stats").setColor(0x00AAFF).setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
+
+      // v2 API has different paths for some fields — try all known paths
+      const purse  = member.coin_purse
+                  || member.currencies?.coin_purse
+                  || 0;
+      const bank   = profile.banking?.balance
+                  || member.profile?.bank_account
+                  || 0;
+      const deaths = member.death_count
+                  || member.player_stats?.deaths?.total
+                  || member.stats?.deaths
+                  || 0;
+      const fairy  = member.fairy_souls_collected
+                  || member.player_data?.fairy_souls
+                  || 0;
+      const cataXP = member.dungeons?.dungeon_types?.catacombs?.experience || 0;
+      const sl     = getSlayerBosses(member);
+      const sxp    = Object.values(sl).reduce((s,v) => s+(v.xp||0), 0);
+      const apiOff = skillsDisabled(member);
+
+      // Kuudra completions
+      const kuudra  = member.nether_island_player_data?.kuudra_completed_tiers || {};
+      const kTotal  = (kuudra.none||0)+(kuudra.hot||0)+(kuudra.burning||0)+(kuudra.fiery||0)+(kuudra.infernal||0);
+      const kInfernal = kuudra.infernal || 0;
+
+      return interaction.editReply({ embeds:[new EmbedBuilder()
+        .setTitle(mojang.name+"'s Skyblock Stats").setColor(0x00AAFF)
+        .setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
         .addFields(
-          { name:"Active Profile",  value:profile.cute_name||"Unknown",            inline:true },
-          { name:"Skill Average",   value:apiOff?"API Off":skillAvg(member).toFixed(2), inline:true },
-          { name:"Catacombs Level", value:String(dungLvl(cataXP)),                inline:true },
-          { name:"Purse",           value:fmt(purse),                              inline:true },
-          { name:"Bank",            value:fmt(bank),                               inline:true },
-          { name:"Total Slayer XP", value:fmt(sxp),                               inline:true },
-          { name:"Deaths",          value:String(member.death_count||0),           inline:true },
-          { name:"Fairy Souls",     value:String(member.fairy_souls_collected||0), inline:true },
-          { name:"Profiles",        value:String(profiles.length),                 inline:true },
-        ).setFooter({ text:apiOff?"Skills API disabled — enable in Hypixel settings":"Hypixel Skyblock Bot" }).setTimestamp()] });
+          { name:"Active Profile",   value:profile.cute_name||"Unknown",                 inline:true },
+          { name:"Skill Average",    value:apiOff?"API Off":skillAvg(member).toFixed(2), inline:true },
+          { name:"Catacombs Level",  value:String(dungLvl(cataXP)),                     inline:true },
+          { name:"Purse",            value:fmt(purse),                                   inline:true },
+          { name:"Bank",             value:fmt(bank),                                    inline:true },
+          { name:"Total Slayer XP",  value:fmt(sxp),                                    inline:true },
+          { name:"Deaths",           value:String(deaths),                               inline:true },
+          { name:"Fairy Souls",      value:String(fairy),                                inline:true },
+          { name:"Profiles",         value:String(profiles.length),                      inline:true },
+          { name:"Kuudra Runs",      value:String(kTotal)+" total ("+kInfernal+" Infernal)", inline:true },
+          { name:"Mages Rep",        value:fmt(member.nether_island_player_data?.mages_reputation||0), inline:true },
+          { name:"Barbarians Rep",   value:fmt(member.nether_island_player_data?.barbarians_reputation||0), inline:true },
+        )
+        .setFooter({ text:apiOff?"Skills API disabled — enable in Hypixel /api settings":"Hypixel Skyblock Bot" })
+        .setTimestamp()] });
     }
 
-    /* /networth — real NBT parsing + Bazaar/AH prices */
+    /* /networth — Sky Miner style with real NBT item parsing */
     if (cmd === "networth") {
-      const username = await resolveUser(interaction);
-      const mojang   = await fetchMojang(username);
-      const profiles = await fetchProfiles(mojang.id);
-      const profile  = getActive(profiles);
-      const member   = getMember(profile, mojang.id);
-      if (!member) return interaction.editReply("No Skyblock data for **"+mojang.name+"**.");
+      const username    = await resolveUser(interaction);
+      const mojang      = await fetchMojang(username);
+      const profiles    = await fetchProfiles(mojang.id);
+      const profile     = getActive(profiles);
+      const member      = getMember(profile, mojang.id);
+      if (!member) return interaction.editReply("No Skyblock data for **" + mojang.name + "**.");
 
       const profileName = profile?.cute_name || "Unknown";
+      const purse       = member.coin_purse || member.currencies?.coin_purse || 0;
+      const bank        = profile?.banking?.balance || 0;
+
+      // Essence value
+      const prices      = await fetchPrices();
+      const essTypes    = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
+      const essence     = member.essence || {};
+      let   essenceVal  = 0;
+      const essLines    = [];
+      for (const t of essTypes) {
+        const amt = essence[t]?.current || 0;
+        if (!amt) continue;
+        essenceVal += amt * (prices["ESSENCE_"+t] || 150);
+        essLines.push(t.charAt(0) + t.slice(1).toLowerCase() + ": " + amt.toLocaleString());
+      }
+
       const nw = await calcNetworth(member, profile);
 
+      // Title description — Sky Miner header
+      const descParts = [
+        "**Networth: " + nw.total.toLocaleString() + " (" + fmt(nw.total) + ")**",
+        "",
+        "**Purse:** " + fmt(purse),
+        "**Bank:** " + fmt(bank),
+      ];
+      if (essenceVal > 0) {
+        descParts.push("**Essence:** " + fmt(essenceVal));
+      }
+
       const embed = new EmbedBuilder()
-        .setTitle(mojang.name+"'s Networth on "+profileName)
-        .setColor(0x00AAFF)
-        .setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
-        .setDescription(
-          "**Networth: "+nw.total.toLocaleString()+" ("+fmt(nw.total)+")**\n\n"+
-          "**Purse:** "+fmt(nw.purse)+"\n"+
-          "**Bank:** "+fmt(nw.bank)+"\n"+
-          "**Essence:** "+fmt(nw.essenceVal)
-        )
-        .setFooter({ text:"Prices from Hypixel Bazaar + AH | prismarine-nbt" })
+        .setTitle(mojang.name + "'s Networth on " + profileName)
+        .setColor(0x55AAFF)
+        .setThumbnail("https://mc-heads.net/avatar/" + mojang.id)
+        .setDescription(descParts.join("\n"))
+        .setFooter({ text: "Prices: Bazaar + AH | prismarine-nbt" })
         .setTimestamp();
 
-      // Add category fields Sky Miner style
-      for (const cat of nw.categories) {
-        if (!cat.total || cat.total <= 0) continue;
-        let val = "**"+fmt(cat.total)+"**";
-        if (cat.items && cat.items.length > 0) {
-          val += "\n" + cat.items.map(it => "  "+it.name+" \u2014 "+fmt(it.price)).join("\n");
+      // Category fields — Sky Miner item list style
+      if (nw.categories.length > 0) {
+        for (const cat of nw.categories) {
+          if (!cat.total || cat.total <= 0) continue;
+          const itemLines = (cat.items || []).map(it => {
+            return "\u2022 " + it.name + " (" + fmt(it.price) + ")";
+          });
+          let fieldVal = "**" + fmt(cat.total) + "**";
+          if (itemLines.length > 0) fieldVal += "\n" + itemLines.join("\n");
+          if (fieldVal.length > 1024) fieldVal = fieldVal.slice(0, 1021) + "...";
+          embed.addFields({ name: cat.label + " (" + fmt(cat.total) + ")", value: fieldVal, inline: false });
         }
-        if (val.length > 1024) val = val.slice(0,1021)+"...";
-        embed.addFields({ name: cat.label+" ("+fmt(cat.total)+")", value: val, inline:false });
+      } else {
+        embed.addFields({
+          name: "Item Breakdown",
+          value: "Could not parse inventory items.\nFull details: sky.shiiyu.moe/stats/" + mojang.name,
+          inline: false,
+        });
       }
 
-      if (nw.categories.length === 0) {
-        embed.addFields({ name:"Note", value:"No item data found. Player may have API disabled or empty inventory.\nFull breakdown: [sky.shiiyu.moe/stats/"+mojang.name+"](https://sky.shiiyu.moe/stats/"+mojang.name+")", inline:false });
-      }
-
-      return interaction.editReply({ embeds:[embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
 
-    if (cmd === "skills") {
+        if (cmd === "skills") {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
       const member   = getMember(getActive(await fetchProfiles(mojang.id)), mojang.id);
