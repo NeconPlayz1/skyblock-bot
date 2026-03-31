@@ -83,28 +83,40 @@ async function parseNBTItems(b64data) {
   try {
     const buf      = Buffer.from(b64data, "base64");
     const unzipped = await gunzip(buf);
-    const { parsed } = await nbt.parse(unzipped);
-    const rawItems = parsed?.value?.i?.value?.value || [];
-    return rawItems.map(item => {
-      if (!item || !item.id) return null;
-      const tag = item.tag?.value;
-      const ea  = tag?.ExtraAttributes?.value;
-      const id  = ea?.id?.value || "";
+    const result   = await nbt.parse(unzipped);
+    const parsed   = result.parsed || result;
+    const root     = parsed?.value;
+    const rawItems = root?.i?.value?.value || [];
+    const out = [];
+    for (const item of rawItems) {
+      if (!item || item.id == null) continue;
+      const tag  = item.tag?.value;
+      const ea   = tag?.ExtraAttributes?.value;
+      const sbId = ea?.id?.value;
+      if (!sbId) continue;
       const rawName = tag?.display?.value?.Name?.value || "";
-      const name    = stripColor(rawName) || id;
+      const name    = stripColor(rawName) || sbId;
       const count   = item.Count?.value || 1;
-      return { id, name, count };
-    }).filter(x => x && x.id);
+      out.push({ id: sbId, name, count });
+    }
+    return out;
   } catch (e) {
     return [];
   }
 }
 
-/* ─── PRICE LOOKUP ──────────────────────────────────────────────────────── */
-
 async function fetchPrices() {
   if (cache.has("prices")) return cache.get("prices");
   const prices = {};
+
+  // Moulberry lowest BIN — best for AH items, public API no auth needed
+  try {
+    const r = await axios.get("https://moulberry.codes/lowestbin.json", { timeout: 8000 });
+    for (const [id, price] of Object.entries(r.data || {})) {
+      prices[id] = price;
+    }
+    console.log("[PRICE] Moulberry:", Object.keys(prices).length, "items");
+  } catch(e) { console.log("[PRICE] Moulberry failed:", e.message); }
 
   // Bazaar prices
   try {
@@ -112,22 +124,11 @@ async function fetchPrices() {
     for (const [id, data] of Object.entries(bz)) {
       const sell = data.quick_status?.sellPrice || 0;
       const buy  = data.quick_status?.buyPrice  || 0;
-      prices[id] = Math.max(sell, buy * 0.9);
+      const p    = Math.max(sell, buy * 0.9);
+      if (p > 0 && (!prices[id] || p > prices[id])) prices[id] = p;
     }
-  } catch(e) { console.log("Bazaar price fetch failed"); }
-
-  // AH lowest BIN for page 0 (rough approximation)
-  try {
-    const ah = await fetchAH();
-    for (const a of (ah.auctions || [])) {
-      if (!a.bin || a.claimed) continue;
-      const ea = a.item_name || "";
-      const id = ea.toUpperCase().replace(/ /g,"_");
-      if (!prices[id] || a.starting_bid < prices[id]) {
-        prices[id] = a.starting_bid;
-      }
-    }
-  } catch(e) { /* skip */ }
+    console.log("[PRICE] Bazaar done");
+  } catch(e) { console.log("[PRICE] Bazaar failed:", e.message); }
 
   cache.set("prices", prices);
   return prices;
@@ -138,75 +139,65 @@ function getItemPrice(prices, id) {
   return prices[id] || prices[id.toUpperCase()] || 0;
 }
 
-/* ─── NETWORTH CALCULATOR ───────────────────────────────────────────────── */
-
 async function calcNetworth(member, profile) {
-  const prices    = await fetchPrices();
-  const purse     = member.coin_purse || 0;
-  const bank      = profile?.banking?.balance || 0;
+  const k = "nw_" + (profile?.profile_id || "x");
+  if (cache.has(k)) return cache.get(k);
+
+  const prices = await fetchPrices();
+  const purse  = member.coin_purse || member.currencies?.coin_purse || 0;
+  const bank   = profile?.banking?.balance || 0;
 
   // Essence value
-  const essTypes  = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
-  const essence   = member.essence || {};
-  let essenceVal  = 0;
+  const essTypes = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
+  const essence  = member.essence || {};
+  let essVal = 0;
   for (const t of essTypes) {
-    const amt = essence[t]?.current || 0;
-    const pid = "ESSENCE_" + t;
-    essenceVal += amt * (prices[pid] || 150);
+    essVal += (essence[t]?.current || 0) * (prices["ESSENCE_"+t] || 150);
   }
 
-  // Parse all inventory sections
+  // Inventory sections — try all known API paths
   const sections = [
-    { key: "inv_contents",         label: "Items"       },
-    { key: "armor_contents",       label: "Armor"       },
-    { key: "ender_chest_contents", label: "Ender Chest" },
-    { key: "talisman_bag",         label: "Accessories" },
-    { key: "wardrobe_contents",    label: "Wardrobe"    },
-    { key: "fishing_bag",          label: "Fishing Bag" },
-    { key: "quiver",               label: "Quiver"      },
+    { keys:["armor_contents","inventory_armor_contents"],  label:"Armor"       },
+    { keys:["inv_contents","inventory_contents"],          label:"Items"        },
+    { keys:["talisman_bag","accessory_bag_storage"],       label:"Accessories"  },
+    { keys:["ender_chest_contents"],                       label:"Ender Chest"  },
+    { keys:["wardrobe_contents"],                          label:"Wardrobe"     },
+    { keys:["fishing_bag"],                                label:"Fishing Bag"  },
+    { keys:["quiver"],                                     label:"Quiver"       },
   ];
 
-  const categoryResults = [];
-  let totalItemNW = 0;
+  const categories = [];
+  let totalItems = 0;
 
-  for (const { key, label } of sections) {
-    const data = member[key]?.data;
-    const items = await parseNBTItems(data);
-    if (!items.length) continue;
+  for (const { keys, label } of sections) {
+    let data = null;
+    for (const key of keys) {
+      const v = member[key];
+      if (!v) continue;
+      data = v.data || v.inv_data || (typeof v === "string" ? v : null);
+      if (data) break;
+    }
+    if (!data) continue;
 
-    // Value each item
-    const valued = items.map(it => {
-      const price = getItemPrice(prices, it.id) * (it.count || 1);
-      return { ...it, price };
-    }).filter(it => it.price > 0).sort((a,b) => b.price - a.price);
+    const items  = await parseNBTItems(data);
+    const valued = items
+      .map(it => ({ ...it, price: getItemPrice(prices, it.id) * (it.count || 1) }))
+      .filter(it => it.price > 0)
+      .sort((a, b) => b.price - a.price);
 
     const catTotal = valued.reduce((s, it) => s + it.price, 0);
     if (catTotal <= 0) continue;
 
-    totalItemNW += catTotal;
-    categoryResults.push({ label, total: catTotal, items: valued.slice(0, 5) });
-  }
-
-  // Backpack contents
-  const backpacks = member.backpack_contents || {};
-  let backpackTotal = 0;
-  for (const bp of Object.values(backpacks)) {
-    const items = await parseNBTItems(bp?.data);
-    for (const it of items) {
-      backpackTotal += getItemPrice(prices, it.id) * (it.count || 1);
-    }
-  }
-  if (backpackTotal > 0) {
-    totalItemNW += backpackTotal;
-    categoryResults.push({ label: "Storage", total: backpackTotal, items: [] });
+    totalItems += catTotal;
+    categories.push({ label, total: catTotal, items: valued.slice(0, 5) });
   }
 
   // Pets
-  const pets = member.pets_data?.pets || member.pets || [];
-  let petTotal = 0;
+  const pets     = member.pets_data?.pets || member.pets || [];
+  let petTotal   = 0;
   const petItems = [];
   for (const pet of pets) {
-    const pid = "PET_" + (pet.type || "").toUpperCase();
+    const pid    = "PET_" + (pet.type || "").toUpperCase();
     const pPrice = prices[pid] || 0;
     if (pPrice > 0) {
       petTotal += pPrice;
@@ -214,16 +205,28 @@ async function calcNetworth(member, profile) {
     }
   }
   if (petTotal > 0) {
-    totalItemNW += petTotal;
-    categoryResults.push({ label: "Pets", total: petTotal, items: petItems.sort((a,b)=>b.price-a.price).slice(0,5) });
+    totalItems += petTotal;
+    categories.push({ label:"Pets", total:petTotal, items:petItems.sort((a,b)=>b.price-a.price).slice(0,5) });
   }
 
-  // Sort categories by total
-  categoryResults.sort((a,b) => b.total - a.total);
+  // Backpacks/Storage
+  const bps = member.backpack_contents || {};
+  let bpTotal = 0;
+  for (const bp of Object.values(bps)) {
+    const items = await parseNBTItems(bp?.data);
+    for (const it of items) bpTotal += getItemPrice(prices, it.id) * (it.count || 1);
+  }
+  if (bpTotal > 0) {
+    totalItems += bpTotal;
+    categories.push({ label:"Storage", total:bpTotal, items:[] });
+  }
 
-  const total = purse + bank + essenceVal + totalItemNW;
+  categories.sort((a, b) => b.total - a.total);
 
-  return { total, purse, bank, essenceVal, totalItemNW, categories: categoryResults };
+  const total  = purse + bank + essVal + totalItems;
+  const result = { total, purse, bank, essVal, totalItems, categories };
+  cache.set(k, result);
+  return result;
 }
 
 /* ─── HELPERS ───────────────────────────────────────────────────────────── */
