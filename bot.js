@@ -101,7 +101,26 @@ async function parseItems(b64) {
       if (!id) return null;
       const name  = stripColor(tag?.display?.value?.Name?.value) || id;
       const count = item.Count?.value || 1;
-      return { id, name, count };
+
+      // Dungeon stars (upgrade_level = normal stars 1-5, dungeon_item_level = master stars 1-5)
+      const upgLevel  = ea?.upgrade_level?.value  || 0;
+      const dungLevel = ea?.dungeon_item_level?.value || 0;
+      const stars = Math.max(upgLevel, dungLevel);
+
+      // Enchantments — count them for value boost
+      const enchMap = ea?.enchantments?.value || {};
+      const enchCount = Object.keys(enchMap).length;
+
+      // Reforge
+      const reforge = ea?.modifier?.value || "";
+
+      // Hot potato books / fuming potato books
+      const hpb = ea?.hot_potato_count?.value || 0;
+
+      // Recombobulated
+      const recomb = ea?.rarity_upgrades?.value || 0;
+
+      return { id, name, count, stars, enchCount, reforge, hpb, recomb };
     }).filter(Boolean);
   } catch(e) { return []; }
 }
@@ -118,36 +137,63 @@ async function calcNetworth(member, profile) {
   let essVal = 0;
   for (const t of essTypes) essVal += ((member.essence||{})[t]?.current||0) * (prices["ESSENCE_"+t]||150);
 
+  // Extract NBT base64 data from ALL known API paths (v1 and v2)
   function getData(keys) {
     for (const key of keys) {
-      const v2 = member?.inventory?.[key]; if (v2?.data) return v2.data; if (typeof v2==="string") return v2;
-      const v1 = member?.[key]; if (v1?.data) return v1.data; if (v1?.inv_data) return v1.inv_data; if (typeof v1==="string") return v1;
+      // v2: member.inventory.KEY.data
+      const inv = member?.inventory;
+      if (inv) {
+        const v2 = inv[key];
+        if (v2?.data) return v2.data;
+        if (typeof v2 === "string" && v2.length > 10) return v2;
+      }
+      // v1: member.KEY.data or member.KEY directly
+      const v1 = member?.[key];
+      if (v1?.data) return v1.data;
+      if (v1?.inv_data) return v1.inv_data;
+      if (typeof v1 === "string" && v1.length > 10) return v1;
     }
     return null;
   }
 
   const sections = [
-    { label:"Armor",       keys:["armor_contents","inv_armor"] },
-    { label:"Items",       keys:["inv_contents","bag_contents"] },
-    { label:"Accessories", keys:["talisman_bag","acc_bag"] },
+    { label:"Armor",       keys:["armor_contents","inv_armor","equipment_contents"] },
+    { label:"Items",       keys:["inv_contents","bag_contents","inventory"] },
+    { label:"Accessories", keys:["talisman_bag","accessory_bag","acc_bag"] },
     { label:"Ender Chest", keys:["ender_chest_contents","ender_chest"] },
     { label:"Wardrobe",    keys:["wardrobe_contents","wardrobe"] },
     { label:"Fishing Bag", keys:["fishing_bag"] },
     { label:"Quiver",      keys:["quiver"] },
+    { label:"Potion Bag",  keys:["potion_bag"] },
   ];
 
   const categories = []; let totalItems = 0;
   for (const { label, keys } of sections) {
     const data = getData(keys); if (!data) continue;
     const items = await parseItems(data);
-    const valued = items.map(it => ({ ...it, price: getPrice(prices,it.id)*it.count })).filter(it=>it.price>0).sort((a,b)=>b.price-a.price);
+    const valued = items.map(it => {
+      let base = getPrice(prices, it.id);
+      if (base <= 0) return { ...it, price: 0 };
+      // Star multiplier
+      let starMult = 1.0;
+      if (it.stars >= 1 && it.stars <= 5)  starMult = 1 + it.stars * 0.35;
+      if (it.stars >= 6 && it.stars <= 10) starMult = 2.75 + (it.stars - 5) * 0.5;
+      // HPB value (~2M per book)
+      const hpbVal = (it.hpb || 0) * 2000000;
+      // Enchant value (only for expensive items)
+      const enchVal = base > 5000000 ? (it.enchCount || 0) * 500000 : 0;
+      // Recomb adds ~10M
+      const recombVal = (it.recomb || 0) > 0 ? 10000000 : 0;
+      const price = (base * starMult + hpbVal + enchVal + recombVal) * (it.count || 1);
+      return { ...it, price };
+    }).filter(it=>it.price>0).sort((a,b)=>b.price-a.price);
     const total = valued.reduce((s,it)=>s+it.price,0);
     if (total <= 0) continue;
     totalItems += total;
     categories.push({ label, total, items: valued.slice(0,5) });
   }
 
-  const pets = member.pets_data?.pets || member.pets || [];
+  const pets = member.pets_data?.pets || member.pets || member.inventory?.pets || [];
   let petTotal = 0; const petValued = [];
   for (const pet of pets) {
     const p = getPrice(prices,"PET_"+(pet.type||"").toUpperCase());
@@ -352,26 +398,44 @@ client.on("interactionCreate", async interaction=>{
         .setTimestamp()]});
     }
 
-    /* /networth — SkyHelper style */
+    /* /networth — SkyHelper exact style */
     if (cmd==="networth") {
-      const username=await resolveUser(interaction);
-      const mojang=await fetchMojang(username);
-      const profiles=await fetchProfiles(mojang.id);
-      const profile=getActive(profiles);
-      const member=getMember(profile,mojang.id);
+      const username = await resolveUser(interaction);
+      const mojang   = await fetchMojang(username);
+      const profiles = await fetchProfiles(mojang.id);
+      const profile  = getActive(profiles);
+      const member   = getMember(profile, mojang.id);
       if (!member) return interaction.editReply("No Skyblock data for **"+mojang.name+"**.");
 
-      const profileName=profile?.cute_name||"Unknown";
-      const nw=await calcNetworth(member,profile);
+      const profileName = profile?.cute_name || "Unknown";
+      const nw = await calcNetworth(member, profile);
 
       // Essence
-      const essTypes=["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
-      const ess=member.essence||{};
-      const essDetails=essTypes.filter(t=>(ess[t]?.current||0)>0).map(t=>t.charAt(0)+t.slice(1).toLowerCase()+": **"+(ess[t].current).toLocaleString()+"**").join("  ");
+      const essTypes = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
+      const ess = member.essence || {};
+      const essLines = [];
+      for (const t of essTypes) {
+        const amt = ess[t]?.current || 0;
+        if (amt > 0) essLines.push(t.charAt(0)+t.slice(1).toLowerCase()+": "+amt.toLocaleString());
+      }
 
-      // SkyHelper style description
-      const descParts=[
-        "**Networth: "+nw.total.toLocaleString()+" ("+fmt(nw.total)+")**",
+      // Render dungeon stars
+      function renderStars(stars) {
+        if (!stars) return "";
+        const s1 = Math.min(stars, 5);
+        const s2 = Math.max(0, stars - 5);
+        return " " + "\u272B".repeat(s1) + "\u2605".repeat(s2);
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(mojang.name+"'s Networth on "+profileName)
+        .setColor(0x55AAFF)
+        .setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
+        .setFooter({text:"Moulberry BIN + Bazaar | Stars/enchants estimated"})
+        .setTimestamp();
+
+      const hLines = [
+        "Networth: **"+nw.total.toLocaleString()+" ("+fmt(nw.total)+")**",
         "",
         "**Purse**",
         fmt(nw.purse),
@@ -379,34 +443,28 @@ client.on("interactionCreate", async interaction=>{
         "**Bank**",
         fmt(nw.bank),
       ];
-      if (nw.essVal>0) { descParts.push("","**Essence**",fmt(nw.essVal)+(essDetails?"\n"+essDetails:"")); }
+      if (nw.essVal > 0) {
+        hLines.push("", "**Essence**", fmt(nw.essVal) + (essLines.length ? " ("+essLines.slice(0,3).join(", ")+(essLines.length>3?" +more":"")+")" : ""));
+      }
+      embed.setDescription(hLines.join("\n"));
 
-      const embed=new EmbedBuilder()
-        .setTitle(mojang.name+"'s Networth on "+profileName)
-        .setColor(0x55AAFF)
-        .setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
-        .setDescription(descParts.join("\n"))
-        .setFooter({text:"Prices: Moulberry lowest BIN + Bazaar | enchants add extra value"})
-        .setTimestamp();
-
-      if (nw.categories.length>0) {
+      if (nw.categories.length > 0) {
         for (const cat of nw.categories) {
-          if (!cat.total||cat.total<=0) continue;
-          const itemLines=(cat.items||[]).map(it=>{
-            const p=it.price>=1e9?(it.price/1e9).toFixed(2)+"B":it.price>=1e6?(it.price/1e6).toFixed(2)+"M":it.price>=1e3?(it.price/1e3).toFixed(1)+"K":Math.round(it.price).toLocaleString();
-            return it.name+" ("+p+")";
+          if (!cat.total || cat.total <= 0) continue;
+          const itemLines = (cat.items||[]).map(it => {
+            const stars = renderStars(it.stars || 0);
+            const p = it.price>=1e9?(it.price/1e9).toFixed(2)+"B":it.price>=1e6?(it.price/1e6).toFixed(2)+"M":it.price>=1e3?(it.price/1e3).toFixed(1)+"K":Math.round(it.price).toLocaleString();
+            return it.name+stars+" ("+p+")";
           });
-          let val=fmt(cat.total);
-          if (itemLines.length>0) val+="\n"+itemLines.join("\n");
-          if (val.length>1024) val=val.slice(0,1021)+"...";
-          embed.addFields({name:cat.label+" ("+fmt(cat.total)+")",value:val,inline:false});
+          let val = fmt(cat.total) + "\n" + itemLines.join("\n");
+          if (val.length > 1024) val = val.slice(0,1021)+"...";
+          embed.addFields({name:cat.label+" ("+fmt(cat.total)+")", value:val, inline:false});
         }
       } else {
         embed.addFields({name:"Item Breakdown",value:"Could not parse inventory.\nFull details: sky.shiiyu.moe/stats/"+mojang.name,inline:false});
       }
       return interaction.editReply({embeds:[embed]});
     }
-
     if (cmd==="skills") {
       const username=await resolveUser(interaction);
       const mojang=await fetchMojang(username);
