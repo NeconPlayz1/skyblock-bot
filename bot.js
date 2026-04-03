@@ -1,6 +1,6 @@
 const {
   Client, GatewayIntentBits, REST, Routes,
-  SlashCommandBuilder, EmbedBuilder,
+  SlashCommandBuilder, EmbedBuilder, AttachmentBuilder,
 } = require("discord.js");
 const axios      = require("axios");
 const NodeCache  = require("node-cache");
@@ -8,6 +8,7 @@ const nbt        = require("prismarine-nbt");
 const zlib       = require("zlib");
 const { promisify } = require("util");
 const gunzip     = promisify(zlib.gunzip);
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
 
 const DISCORD_TOKEN   = process.env.DISCORD_TOKEN;
 const CLIENT_ID       = process.env.CLIENT_ID;
@@ -276,6 +277,213 @@ const TIERS={
   infernal:{label:"Infernal (T5)",color:0x8800FF,minEHP:300000,recCata:30,setup:{armor:"Infernal Crimson Armor (best quality)",weapon:"Infernal Staff Starred / Shadow Fury",pet:"Blaze Lvl 100 Tier Boost or Ender Dragon Lvl 100",acc:"Fully optimized Talisman Bag (Recombobulated + MP reforged)",reforge:"Fierce Chest, Necrotic Helm, Withered/Bloody Legs/Boots",notes:"Need 300k+ EHP. Overload 5, God Pot, Mana Flask."},profit:{avgLoot:9000000,keyCost:4000000},guide:["**Phase 1:** Perfect run under 35s.","**Phase 2:** Extreme minions.","**Phase 3:** Ballista 4+ hits, constant AoE.","**Phase 4:** Infernal chests drop 10M+ items."]},
 };
 
+/* IMAGE GENERATOR — Sky Miner style networth card */
+
+// Rarity colors
+const RARITY_COLOR = {
+  COMMON: "#FFFFFF", UNCOMMON: "#55FF55", RARE: "#5555FF",
+  EPIC: "#AA00AA", LEGENDARY: "#FFAA00", MYTHIC: "#FF55FF",
+  DIVINE: "#55FFFF", SPECIAL: "#FF5555", VERY_SPECIAL: "#FF5555",
+};
+
+// Fetch item image from SkyCrypt CDN
+const imgCache = new Map();
+async function fetchItemImg(canvas, itemId) {
+  if (!itemId) return null;
+  const key = itemId.toUpperCase();
+  if (imgCache.has(key)) return imgCache.get(key);
+  try {
+    const url = "https://sky.shiiyu.moe/item/" + key;
+    const r   = await axios.get(url, { responseType:"arraybuffer", timeout:5000 });
+    const img = await loadImage(Buffer.from(r.data));
+    imgCache.set(key, img);
+    return img;
+  } catch(e) {
+    imgCache.set(key, null);
+    return null;
+  }
+}
+
+// Star string
+function starStr(stars) {
+  if (!stars) return "";
+  const s1 = "✫".repeat(Math.min(stars, 5));
+  const s2 = "★".repeat(Math.max(0, stars - 5));
+  return s1 + s2;
+}
+
+async function generateNetworthImage(mojang, profileName, nw, member) {
+  // Layout constants
+  const W        = 720;
+  const PADDING  = 20;
+  const COL      = 340;  // two columns
+  const ITEM_H   = 36;
+  const ICON_SZ  = 28;
+  const HDR_H    = 160;  // header height
+
+  // Count total rows needed
+  let totalRows = 0;
+  for (const cat of nw.categories) totalRows += 1 + Math.min(cat.items.length, 5);
+
+  const BODY_H = Math.max(200, totalRows * ITEM_H + nw.categories.length * 40);
+  const H      = HDR_H + BODY_H + PADDING;
+
+  const canvas  = createCanvas(W, H);
+  const ctx     = canvas.getContext("2d");
+
+  // === BACKGROUND ===
+  ctx.fillStyle = "#1a1a2e";
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle gradient overlay
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "rgba(85,170,255,0.08)");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // === HEADER CARD ===
+  ctx.fillStyle = "#16213e";
+  roundRect(ctx, PADDING, PADDING, W - PADDING*2, HDR_H - PADDING, 12);
+
+  // Blue accent bar
+  ctx.fillStyle = "#55AAFF";
+  ctx.fillRect(PADDING, PADDING, 4, HDR_H - PADDING);
+
+  // Player head
+  try {
+    const headImg = await loadImage("https://mc-heads.net/avatar/" + mojang.id + "/48");
+    ctx.drawImage(headImg, PADDING + 16, PADDING + 12, 48, 48);
+  } catch(e) {}
+
+  // Player name + profile
+  ctx.fillStyle = "#55AAFF";
+  ctx.font = "bold 22px sans-serif";
+  ctx.fillText(mojang.name + "'s Networth", PADDING + 76, PADDING + 34);
+
+  ctx.fillStyle = "#aaaacc";
+  ctx.font = "14px sans-serif";
+  ctx.fillText("Profile: " + profileName, PADDING + 76, PADDING + 54);
+
+  // Total networth — large
+  ctx.fillStyle = "#FFD700";
+  ctx.font = "bold 28px sans-serif";
+  ctx.fillText(fmt(nw.total), PADDING + 16, PADDING + 95);
+
+  ctx.fillStyle = "#888899";
+  ctx.font = "13px sans-serif";
+  ctx.fillText("(" + nw.total.toLocaleString() + ")", PADDING + 16, PADDING + 115);
+
+  // Purse / Bank / Essence row
+  const coins = [
+    { label: "Purse", val: fmt(nw.purse), icon: null },
+    { label: "Bank",  val: fmt(nw.bank),  icon: null },
+    { label: "Essence", val: fmt(nw.essVal), icon: null },
+  ];
+  let cx = PADDING + 16;
+  for (const c of coins) {
+    ctx.fillStyle = "#aaaacc";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(c.label, cx, PADDING + 135);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 13px sans-serif";
+    ctx.fillText(c.val, cx, PADDING + 150);
+    cx += 150;
+  }
+
+  // === CATEGORIES ===
+  let y = HDR_H + 10;
+
+  // Two-column layout
+  const leftCats  = [];
+  const rightCats = [];
+  let leftTotal = 0, rightTotal = 0;
+  for (const cat of nw.categories) {
+    if (leftTotal <= rightTotal) { leftCats.push(cat); leftTotal += cat.total; }
+    else { rightCats.push(cat); rightTotal += cat.total; }
+  }
+
+  // Draw both columns
+  const drawColumn = async (cats, xOff) => {
+    let cy = HDR_H + 10;
+    for (const cat of cats) {
+      // Category header
+      ctx.fillStyle = "#16213e";
+      roundRect(ctx, xOff + PADDING, cy, COL, 32, 8);
+      ctx.fillStyle = "#55AAFF";
+      ctx.font = "bold 15px sans-serif";
+      ctx.fillText(cat.label, xOff + PADDING + 10, cy + 21);
+      ctx.fillStyle = "#FFD700";
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillText(fmt(cat.total), xOff + PADDING + COL - 70, cy + 21);
+      cy += 38;
+
+      // Items
+      for (const it of (cat.items||[]).slice(0, 5)) {
+        ctx.fillStyle = "rgba(255,255,255,0.03)";
+        roundRect(ctx, xOff + PADDING, cy, COL, ITEM_H - 2, 5);
+
+        // Item icon
+        const img = await fetchItemImg(canvas, it.id);
+        if (img) {
+          ctx.drawImage(img, xOff + PADDING + 4, cy + 4, ICON_SZ, ICON_SZ);
+        } else {
+          // Colored placeholder
+          ctx.fillStyle = "#334455";
+          ctx.fillRect(xOff + PADDING + 4, cy + 4, ICON_SZ, ICON_SZ);
+        }
+
+        // Item name
+        ctx.fillStyle = "#ddddee";
+        ctx.font = "13px sans-serif";
+        const maxW = COL - ICON_SZ - 80;
+        let nameStr = it.name;
+        if (it.stars) nameStr += " " + starStr(it.stars);
+        // Truncate if too long
+        while (ctx.measureText(nameStr).width > maxW && nameStr.length > 5) {
+          nameStr = nameStr.slice(0, -4) + "...";
+        }
+        ctx.fillText(nameStr, xOff + PADDING + ICON_SZ + 8, cy + 20);
+
+        // Price
+        ctx.fillStyle = "#FFD700";
+        ctx.font = "bold 12px sans-serif";
+        const priceStr = fmt(it.price);
+        ctx.fillText(priceStr, xOff + PADDING + COL - ctx.measureText(priceStr).width - 6, cy + 20);
+
+        cy += ITEM_H;
+      }
+      cy += 8;
+    }
+  };
+
+  await drawColumn(leftCats,  0);
+  await drawColumn(rightCats, COL + PADDING);
+
+  // Footer
+  ctx.fillStyle = "#444466";
+  ctx.font = "11px sans-serif";
+  ctx.fillText("Prices: Moulberry BIN + Bazaar  |  Stars & enchants estimated", PADDING, H - 8);
+
+  return canvas.toBuffer("image/png");
+}
+
+// Helper: draw rounded rectangle
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+}
+
 /* COMMANDS */
 const TC=[{name:"Basic (T1)",value:"basic"},{name:"Hot (T2)",value:"hot"},{name:"Burning (T3)",value:"burning"},{name:"Fiery (T4)",value:"fiery"},{name:"Infernal (T5)",value:"infernal"}];
 const uOpt=o=>o.setName("username").setDescription("Minecraft username (skip if you used /link)").setRequired(false);
@@ -398,7 +606,7 @@ client.on("interactionCreate", async interaction=>{
         .setTimestamp()]});
     }
 
-    /* /networth — SkyHelper GUI */
+    /* /networth — Sky Miner style IMAGE */
     if (cmd==="networth") {
       const username = await resolveUser(interaction);
       const mojang   = await fetchMojang(username);
@@ -410,88 +618,41 @@ client.on("interactionCreate", async interaction=>{
       const profileName = profile?.cute_name || "Unknown";
       const nw = await calcNetworth(member, profile);
 
-      // Essence
+      // Essence value
       const essTypes = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
       const ess = member.essence || {};
-      const essLines = essTypes
-        .filter(t => (ess[t]?.current||0) > 0)
-        .map(t => t.charAt(0)+t.slice(1).toLowerCase()+": "+( ess[t].current).toLocaleString());
+      nw.essVal = 0;
+      for (const t of essTypes) nw.essVal += ((ess[t]?.current||0)) * 150;
 
-      // Item emoji by item ID pattern
-      function itemEmoji(id) {
-        id = (id||"").toUpperCase();
-        if (id.includes("SWORD")||id.includes("BLADE")||id.includes("KATANA")||id.includes("RAPIER")) return "\u2694\uFE0F";
-        if (id.includes("BOW")||id.includes("TERMINATOR")) return "\uD83C\uDFF9";
-        if (id.includes("STAFF")||id.includes("WAND")||id.includes("ROD")&&!id.includes("FISHING")) return "\uD83E\uDE84";
-        if (id.includes("HELMET")||id.includes("HOOD")||id.includes("HAT")) return "\uD83E\uDEF3";
-        if (id.includes("CHESTPLATE")||id.includes("CHEST")) return "\uD83D\uDEE1\uFE0F";
-        if (id.includes("LEGGING")) return "\uD83D\uDC56";
-        if (id.includes("BOOTS")||id.includes("SHOE")) return "\uD83D\uDC62";
-        if (id.includes("HYPERION")||id.includes("VALKYRIE")||id.includes("ASTRAEA")||id.includes("SCYLLA")) return "\u2694\uFE0F";
-        if (id.includes("PET")) return "\uD83D\uDC3E";
-        if (id.includes("ORB")||id.includes("SPHERE")) return "\u26AA";
-        if (id.includes("FISHING")||id.includes("ROD")) return "\uD83C\uDFA3";
-        if (id.includes("PICKAXE")||id.includes("DRILL")) return "\u26CF\uFE0F";
-        if (id.includes("AXE")) return "\uD83E\uDE93";
-        if (id.includes("HOE")) return "\uD83C\uDF31";
-        return "\uD83D\uDD37";
-      }
-
-      // Star renderer
-      function renderStars(stars) {
-        if (!stars) return "";
-        const s1 = Math.min(stars, 5);
-        const s2 = Math.max(0, stars-5);
-        return " "+"\u272B".repeat(s1)+"\u2605".repeat(s2);
-      }
-
-      // Build embed
-      const embed = new EmbedBuilder()
-        .setTitle(mojang.name+"'s Networth on "+profileName)
-        .setColor(0x55AAFF)
-        .setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
-        .setFooter({text:"Prices: Moulberry BIN + Bazaar | Stars/enchants estimated"})
-        .setTimestamp();
-
-      // Header — SkyHelper style
-      const hLines = [
-        "Networth: **"+nw.total.toLocaleString()+" ("+fmt(nw.total)+")**",
-        "",
-        "\uD83D\uDCB0 **Purse**",
-        fmt(nw.purse),
-        "",
-        "\uD83C\uDFE6 **Bank**",
-        fmt(nw.bank),
-      ];
-      if (nw.essVal > 0) {
-        hLines.push("","\u26AB **Essence**", fmt(nw.essVal)+(essLines.length?" ("+essLines.slice(0,3).join(", ")+(essLines.length>3?" +more":"")+")" :""));
-      }
-      embed.setDescription(hLines.join("\n"));
-
-      // Category fields — SkyHelper exact item format
-      if (nw.categories.length > 0) {
-        for (const cat of nw.categories) {
-          if (!cat.total||cat.total<=0) continue;
-          const itemLines = (cat.items||[]).map(it => {
-            const em    = itemEmoji(it.id);
-            const stars = renderStars(it.stars||0);
-            const ref   = it.reforge ? it.reforge.charAt(0).toUpperCase()+it.reforge.slice(1)+" " : "";
-            const p     = it.price>=1e9?(it.price/1e9).toFixed(2)+"B"
-                        : it.price>=1e6?(it.price/1e6).toFixed(2)+"M"
-                        : it.price>=1e3?(it.price/1e3).toFixed(1)+"K"
-                        : Math.round(it.price).toLocaleString();
-            return em+" "+ref+it.name+stars+" **("+p+")**";
+      try {
+        const imgBuf = await generateNetworthImage(mojang, profileName, nw, member);
+        const attachment = new AttachmentBuilder(imgBuf, { name: "networth.png" });
+        return interaction.editReply({
+          content: "**" + mojang.name + "'s Networth on " + profileName + "** — **" + fmt(nw.total) + "**",
+          files: [attachment]
+        });
+      } catch(imgErr) {
+        console.error("[NW IMAGE] Error:", imgErr.message);
+        // Fallback to embed if image fails
+        const embed = new EmbedBuilder()
+          .setTitle(mojang.name+"'s Networth on "+profileName)
+          .setColor(0x55AAFF)
+          .setThumbnail("https://mc-heads.net/avatar/"+mojang.id)
+          .setDescription("**Networth: "+fmt(nw.total)+"**\n\n**Purse:** "+fmt(nw.purse)+"  |  **Bank:** "+fmt(nw.bank))
+          .setTimestamp();
+        for (const cat of nw.categories.slice(0,6)) {
+          if (!cat.total) continue;
+          const lines = (cat.items||[]).slice(0,5).map(it => {
+            const p = fmt(it.price);
+            const s = it.stars ? " "+starStr(it.stars) : "";
+            return it.name+s+" ("+p+")";
           });
-          const catTotal = cat.total>=1e9?(cat.total/1e9).toFixed(2)+"B":cat.total>=1e6?(cat.total/1e6).toFixed(2)+"M":(cat.total/1e3).toFixed(1)+"K";
-          let val = itemLines.join("\n");
-          if (!val) val = fmt(cat.total);
-          if (val.length > 1024) val = val.slice(0,1021)+"...";
-          embed.addFields({name: cat.label+" ("+catTotal+")", value: val, inline: false});
+          let val = "**"+fmt(cat.total)+"**\n"+lines.join("\n");
+          if (val.length>1024) val=val.slice(0,1021)+"...";
+          embed.addFields({name:"**"+cat.label+"** ("+fmt(cat.total)+")", value:val, inline:false});
         }
-      } else {
-        embed.addFields({name:"Item Breakdown",value:"Could not parse inventory.\nFull details: sky.shiiyu.moe/stats/"+mojang.name,inline:false});
+        return interaction.editReply({embeds:[embed]});
       }
-      return interaction.editReply({embeds:[embed]});
     }
     if (cmd==="skills") {
       const username=await resolveUser(interaction);
