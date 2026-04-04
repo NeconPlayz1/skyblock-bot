@@ -8,7 +8,8 @@
     "discord.js": "^14.15.3",
     "axios": "^1.7.2",
     "node-cache": "^5.1.2",
-    "prismarine-nbt": "^2.5.0"
+    "prismarine-nbt": "^2.5.0",
+    "@napi-rs/canvas": "^0.1.53"
   },
   "engines": {
     "node": ">=18.0.0"
