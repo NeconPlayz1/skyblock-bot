@@ -1,6 +1,6 @@
 const {
   Client, GatewayIntentBits, REST, Routes,
-  SlashCommandBuilder, EmbedBuilder,
+  SlashCommandBuilder, EmbedBuilder, AttachmentBuilder,
 } = require("discord.js");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -8,6 +8,15 @@ const nbt = require("prismarine-nbt");
 const zlib = require("zlib");
 const { promisify } = require("util");
 const gunzip = promisify(zlib.gunzip);
+let createCanvas, loadImage;
+try {
+  const canvas = require("@napi-rs/canvas");
+  createCanvas = canvas.createCanvas;
+  loadImage = canvas.loadImage;
+  console.log("[CANVAS] Loaded successfully");
+} catch(e) {
+  console.log("[CANVAS] Not available, using embed fallback:", e.message);
+}
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -198,6 +207,191 @@ function iEmoji(id) {
 }
 function fmtS(s) { if (!s) return ""; return " " + "\u272B".repeat(Math.min(s, 5)) + "\u2605".repeat(Math.max(0, s - 5)); }
 
+
+/* ── CANVAS IMAGE GENERATOR ─────────────────────────────────────────────── */
+
+const itemImgCache = new Map();
+
+async function fetchItemImage(itemId) {
+  if (!loadImage) return null;
+  const id = (itemId || "").toUpperCase();
+  if (itemImgCache.has(id)) return itemImgCache.get(id);
+  try {
+    // FurfSky items via sky.shiiyu.moe CDN
+    const url = "https://sky.shiiyu.moe/item/" + id;
+    const r = await axios.get(url, { responseType: "arraybuffer", timeout: 4000 });
+    const img = await loadImage(Buffer.from(r.data));
+    itemImgCache.set(id, img);
+    return img;
+  } catch(e) {
+    itemImgCache.set(id, null);
+    return null;
+  }
+}
+
+function fmtPrice(n) {
+  if (!n || isNaN(n)) return "0";
+  if (n >= 1e9) return (n/1e9).toFixed(2)+"B";
+  if (n >= 1e6) return (n/1e6).toFixed(2)+"M";
+  if (n >= 1e3) return (n/1e3).toFixed(1)+"K";
+  return Math.round(n).toLocaleString();
+}
+
+function fmtStarsCanvas(stars) {
+  if (!stars) return "";
+  return "\u272B".repeat(Math.min(stars,5)) + "\u2605".repeat(Math.max(0,stars-5));
+}
+
+async function generateNetworthImage(mojang, profileName, nw, essVal, essLines) {
+  // Dimensions
+  const W = 680;
+  const ITEM_H = 44;
+  const ICON = 32;
+  const PAD = 16;
+  const COL_W = (W - PAD*3) / 2;
+
+  // Calculate height needed
+  let leftH = 0, rightH = 0;
+  const leftCats = [], rightCats = [];
+  for (const cat of nw.categories) {
+    const h = 30 + (cat.items.length * ITEM_H) + 8;
+    if (leftH <= rightH) { leftCats.push(cat); leftH += h; }
+    else { rightCats.push(cat); rightH += h; }
+  }
+  const bodyH = Math.max(leftH, rightH);
+  const HEADER_H = 160;
+  const H = HEADER_H + bodyH + PAD*2;
+
+  const canvas = createCanvas(W, Math.max(H, 300));
+  const ctx = canvas.getContext("2d");
+
+  // Background
+  ctx.fillStyle = "#0f0f1a";
+  ctx.fillRect(0, 0, W, canvas.height);
+
+  // Header gradient
+  const hg = ctx.createLinearGradient(0, 0, W, HEADER_H);
+  hg.addColorStop(0, "#1a1a3e");
+  hg.addColorStop(1, "#0f0f1a");
+  ctx.fillStyle = hg;
+  ctx.fillRect(0, 0, W, HEADER_H);
+
+  // Blue left bar
+  ctx.fillStyle = "#55AAFF";
+  ctx.fillRect(0, 0, 3, HEADER_H);
+
+  // Player head
+  let headY = PAD;
+  try {
+    const headImg = await loadImage("https://mc-heads.net/avatar/" + mojang.id + "/40");
+    ctx.drawImage(headImg, PAD, headY, 40, 40);
+  } catch(e) {}
+
+  // Player name
+  ctx.fillStyle = "#55AAFF";
+  ctx.font = "bold 18px Arial, sans-serif";
+  ctx.fillText(mojang.name + "'s Networth on " + profileName, PAD + 48, headY + 16);
+
+  // Total networth
+  ctx.fillStyle = "#FFD700";
+  ctx.font = "bold 26px Arial, sans-serif";
+  ctx.fillText(fmtPrice(nw.total), PAD, headY + 62);
+
+  ctx.fillStyle = "#888888";
+  ctx.font = "12px Arial, sans-serif";
+  ctx.fillText(nw.total.toLocaleString(), PAD, headY + 80);
+
+  // Coins row
+  const coinItems = [
+    { label: "Purse", val: fmtPrice(nw.purse) },
+    { label: "Bank",  val: fmtPrice(nw.bank)  },
+    { label: "Essence", val: essVal > 0 ? fmtPrice(essVal) : "0" },
+  ];
+  let cx = PAD;
+  for (const c of coinItems) {
+    ctx.fillStyle = "#aaaacc";
+    ctx.font = "11px Arial, sans-serif";
+    ctx.fillText(c.label, cx, headY + 105);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 13px Arial, sans-serif";
+    ctx.fillText(c.val, cx, headY + 122);
+    cx += 160;
+  }
+
+  // Divider
+  ctx.fillStyle = "#333355";
+  ctx.fillRect(0, HEADER_H - 1, W, 1);
+
+  // Draw categories in two columns
+  async function drawCategories(cats, xOff) {
+    let y = HEADER_H + PAD;
+    for (const cat of cats) {
+      // Category header
+      ctx.fillStyle = "#1e1e3a";
+      ctx.fillRect(xOff, y, COL_W, 26);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 13px Arial, sans-serif";
+      ctx.fillText(cat.label, xOff + 8, y + 17);
+      ctx.fillStyle = "#FFD700";
+      ctx.font = "bold 12px Arial, sans-serif";
+      const tw = ctx.measureText(fmtPrice(cat.total)).width;
+      ctx.fillText(fmtPrice(cat.total), xOff + COL_W - tw - 6, y + 17);
+      y += 30;
+
+      for (const it of cat.items.slice(0, 5)) {
+        // Item row background
+        ctx.fillStyle = "rgba(255,255,255,0.03)";
+        ctx.fillRect(xOff, y, COL_W, ITEM_H - 2);
+
+        // Item icon
+        const img = await fetchItemImage(it.id);
+        if (img) {
+          ctx.drawImage(img, xOff + 4, y + 6, ICON, ICON);
+        } else {
+          ctx.fillStyle = "#2a2a4a";
+          ctx.fillRect(xOff + 4, y + 6, ICON, ICON);
+          ctx.fillStyle = "#555577";
+          ctx.font = "10px Arial";
+          ctx.fillText("?", xOff + 16, y + 25);
+        }
+
+        // Item name (truncate if needed)
+        ctx.fillStyle = "#ddddee";
+        ctx.font = "12px Arial, sans-serif";
+        let nameStr = it.name;
+        if (it.stars) nameStr += " " + fmtStarsCanvas(it.stars);
+        const maxW = COL_W - ICON - 90;
+        while (ctx.measureText(nameStr).width > maxW && nameStr.length > 4) {
+          nameStr = nameStr.slice(0, -4) + "...";
+        }
+        ctx.fillText(nameStr, xOff + ICON + 10, y + 20);
+
+        // Price
+        ctx.fillStyle = "#FFD700";
+        ctx.font = "bold 11px Arial, sans-serif";
+        const pStr = fmtPrice(it.price);
+        const pw = ctx.measureText(pStr).width;
+        ctx.fillText(pStr, xOff + COL_W - pw - 4, y + 20);
+
+        y += ITEM_H;
+      }
+      y += 8;
+    }
+  }
+
+  await Promise.all([
+    drawCategories(leftCats,  PAD),
+    drawCategories(rightCats, PAD + COL_W + PAD),
+  ]);
+
+  // Footer
+  ctx.fillStyle = "#444466";
+  ctx.font = "10px Arial, sans-serif";
+  ctx.fillText("Prices: Moulberry BIN + Bazaar  |  Item images: FurfSky Reborn via sky.shiiyu.moe", PAD, canvas.height - 6);
+
+  return canvas.toBuffer("image/png");
+}
+
 const MPMS = [{mp:100,b:"+5 Str, +5 CD"},{mp:150,b:"+1% CC"},{mp:200,b:"+5 Int, +5 Def"},{mp:250,b:"+1% CC"},{mp:300,b:"+5 Str, +5 CD"},{mp:400,b:"+5 Spd, +5 CC"},{mp:500,b:"+10 Str, +10 CD"},{mp:650,b:"+5 Spd, +5 CC"},{mp:800,b:"+10 Int, +10 Def"},{mp:900,b:"+5 Str, +5 CD"},{mp:1000,b:"+10 Str, +15 CD, +2% CC"}];
 const ACC = [
   {name:"Speed Talisman",tier:"Common",mp:3,cost:2000,cat:"Speed"},{name:"Speed Ring",tier:"Uncommon",mp:5,cost:5000,cat:"Speed"},{name:"Speed Artifact",tier:"Rare",mp:8,cost:25000,cat:"Speed"},
@@ -341,59 +535,66 @@ client.on("interactionCreate", async interaction => {
 
     if (cmd === "networth") {
       const username = await resolveUser(interaction);
-      const mojang = await fetchMojang(username);
+      const mojang   = await fetchMojang(username);
       const profiles = await fetchProfiles(mojang.id);
-      const profile = getActive(profiles);
-      const member = getMember(profile, mojang.id);
+      const profile  = getActive(profiles);
+      const member   = getMember(profile, mojang.id);
       if (!member) return interaction.editReply("No Skyblock data for **" + mojang.name + "**.");
+
       const profileName = profile?.cute_name || "Unknown";
       const nw = await calcNetworth(member, profile);
+
+      // Essence
       const essTypes = ["WITHER","DIAMOND","DRAGON","SPIDER","UNDEAD","CRIMSON","ICE","GOLD"];
       const ess = member.essence || {};
       let essVal = 0; const essLines = [];
       for (const t of essTypes) {
         const amt = ess[t]?.current || 0;
-        if (amt > 0) { essVal += amt * 150; essLines.push(t.charAt(0) + t.slice(1).toLowerCase() + ": " + amt.toLocaleString()); }
+        if (amt > 0) { essVal += amt * 150; essLines.push(t.charAt(0)+t.slice(1).toLowerCase()+": "+amt.toLocaleString()); }
       }
+
+      // Try canvas image first
+      if (createCanvas && loadImage) {
+        try {
+          const imgBuf = await generateNetworthImage(mojang, profileName, nw, essVal, essLines);
+          const attach = new AttachmentBuilder(imgBuf, { name: "networth.png" });
+          return interaction.editReply({ content: "**" + mojang.name + "'s Networth** — **" + fmt(nw.total) + "**", files: [attach] });
+        } catch(imgErr) {
+          console.error("[NW IMAGE]", imgErr.message);
+        }
+      }
+
+      // Fallback embed
       const headerLines = [
         "Networth: **" + nw.total.toLocaleString() + " (" + fmt(nw.total) + ")**",
         "",
-        "\uD83D\uDCB0 **Purse**",
-        fmt(nw.purse),
+        "\uD83D\uDCB0 **Purse**", fmt(nw.purse),
         "",
-        "\uD83C\uDFE6 **Bank**",
-        fmt(nw.bank),
+        "\uD83C\uDFE6 **Bank**", fmt(nw.bank),
       ];
       if (essVal > 0) {
-        headerLines.push("", "\u26AB **Essence**", fmt(essVal) + (essLines.length ? " (" + essLines.slice(0, 3).join(", ") + (essLines.length > 3 ? " +more" : "") + ")" : ""));
+        headerLines.push("", "\u26AB **Essence**", fmt(essVal) + (essLines.length ? " (" + essLines.slice(0,3).join(", ") + (essLines.length>3?" +more":"") + ")" : ""));
       }
       const embed = new EmbedBuilder()
         .setTitle(mojang.name + "'s Networth on " + profileName)
-        .setColor(0x55AAFF)
-        .setThumbnail("https://mc-heads.net/avatar/" + mojang.id)
+        .setColor(0x55AAFF).setThumbnail("https://mc-heads.net/avatar/" + mojang.id)
         .setDescription(headerLines.join("\n"))
         .setFooter({text:"Prices: Moulberry BIN + Bazaar | Stars & enchants estimated"})
         .setTimestamp();
-      if (nw.categories.length > 0) {
-        for (const cat of nw.categories) {
-          if (!cat.total || cat.total <= 0) continue;
-          const lines = (cat.items || []).map(it => {
-            const em = iEmoji(it.id);
-            const stars = fmtS(it.stars || 0);
-            const rc = it.recomb ? " \uD83E\uDDF1" : "";
-            const p = it.price >= 1e9 ? (it.price/1e9).toFixed(2)+"B" : it.price >= 1e6 ? (it.price/1e6).toFixed(2)+"M" : it.price >= 1e3 ? (it.price/1e3).toFixed(1)+"K" : Math.round(it.price).toLocaleString();
-            return em + " " + it.name + stars + rc + " **(" + p + ")**";
-          });
-          let val = lines.join("\n") || fmt(cat.total);
-          if (val.length > 1024) val = val.slice(0, 1021) + "...";
-          embed.addFields({name: "**" + cat.label + " (" + fmt(cat.total) + ")**", value: val, inline: false});
-        }
-      } else {
-        embed.addFields({name:"Item Breakdown",value:"Could not parse inventory.\nFull details: sky.shiiyu.moe/stats/"+mojang.name,inline:false});
+      for (const cat of nw.categories) {
+        if (!cat.total || cat.total <= 0) continue;
+        const lines = (cat.items||[]).map(it => {
+          const stars = it.stars ? " " + "\u272B".repeat(Math.min(it.stars,5)) + "\u2605".repeat(Math.max(0,it.stars-5)) : "";
+          const rc = it.recomb ? " \uD83E\uDDF1" : "";
+          const p = it.price>=1e9?(it.price/1e9).toFixed(2)+"B":it.price>=1e6?(it.price/1e6).toFixed(2)+"M":it.price>=1e3?(it.price/1e3).toFixed(1)+"K":Math.round(it.price).toLocaleString();
+          return iEmoji(it.id)+" "+it.name+stars+rc+" **("+p+")**";
+        });
+        let val = lines.join("\n") || fmt(cat.total);
+        if (val.length > 1024) val = val.slice(0,1021)+"...";
+        embed.addFields({name:"**"+cat.label+" ("+fmt(cat.total)+")**", value:val, inline:false});
       }
       return interaction.editReply({embeds:[embed]});
     }
-
     if (cmd === "skills") {
       const username = await resolveUser(interaction);
       const mojang = await fetchMojang(username);
