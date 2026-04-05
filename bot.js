@@ -210,24 +210,47 @@ function fmtS(s) { if (!s) return ""; return " " + "\u272B".repeat(Math.min(s, 5
 
 /* ── CANVAS IMAGE GENERATOR ─────────────────────────────────────────────── */
 
-const itemImgCache = new Map();
-
-async function fetchItemImage(itemId) {
-  if (!loadImage) return null;
-  const id = (itemId || "").toUpperCase();
-  if (itemImgCache.has(id)) return itemImgCache.get(id);
+// Register fonts after canvas loads
+function setupFonts() {
+  if (!createCanvas) return;
   try {
-    // FurfSky items via sky.shiiyu.moe CDN
-    const url = "https://sky.shiiyu.moe/item/" + id;
-    const r = await axios.get(url, { responseType: "arraybuffer", timeout: 4000 });
-    const img = await loadImage(Buffer.from(r.data));
-    itemImgCache.set(id, img);
-    return img;
-  } catch(e) {
-    itemImgCache.set(id, null);
-    return null;
-  }
+    const { registerFont } = require("@napi-rs/canvas");
+    // DejaVu fonts installed via nixpacks.toml
+    const paths = [
+      "/run/current-system/sw/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+      "/nix/store",
+    ];
+    let loaded = false;
+    for (const p of paths) {
+      try {
+        const fs = require("fs");
+        if (fs.existsSync(p) && p.endsWith(".ttf")) {
+          registerFont(p, { family: "DejaVu" });
+          console.log("[FONT] Loaded:", p);
+          loaded = true;
+          break;
+        }
+      } catch(e) {}
+    }
+    // Try glob search
+    if (!loaded) {
+      const { execSync } = require("child_process");
+      try {
+        const found = execSync("find /nix /usr/share/fonts -name 'DejaVuSans.ttf' 2>/dev/null | head -1").toString().trim();
+        if (found) {
+          registerFont(found, { family: "DejaVu" });
+          console.log("[FONT] Found via search:", found);
+        }
+      } catch(e) { console.log("[FONT] Search failed:", e.message); }
+    }
+  } catch(e) { console.log("[FONT] Setup failed:", e.message); }
 }
+
+setTimeout(setupFonts, 100);
+
+
 
 function fmtPrice(n) {
   if (!n || isNaN(n)) return "0";
@@ -237,157 +260,177 @@ function fmtPrice(n) {
   return Math.round(n).toLocaleString();
 }
 
-function fmtStarsCanvas(stars) {
-  if (!stars) return "";
-  return "\u272B".repeat(Math.min(stars,5)) + "\u2605".repeat(Math.max(0,stars-5));
+// Item color by category (like Minecraft rarity colors)
+function itemColor(id) {
+  id = (id||"").toUpperCase();
+  if (id.includes("HYPERION")||id.includes("ASTRAEA")||id.includes("SCYLLA")||id.includes("VALKYRIE")||id.includes("SHADOW_FURY")) return "#FF55FF"; // MYTHIC
+  if (id.includes("TERMINATOR")||id.includes("_STAFF")||id.includes("HELLFIRE_ROD")) return "#FF55FF";
+  if (id.includes("INFERNAL_")) return "#FF5555"; // LEGENDARY-ish
+  if (id.includes("FIERY_")||id.includes("BURNING_")) return "#FF8800";
+  if (id.includes("_CHESTPLATE")||id.includes("_HELMET")||id.includes("_LEGGINGS")||id.includes("_BOOTS")) return "#5555FF"; // armor
+  if (id.includes("_SWORD")||id.includes("BLADE")||id.includes("KATANA")) return "#55FFFF";
+  if (id.includes("_BOW")||id.includes("SHORTBOW")) return "#55FF55";
+  if (id.startsWith("PET_")) return "#FFAA00";
+  if (id.includes("TALISMAN")||id.includes("_RING")||id.includes("ARTIFACT")) return "#AA00AA";
+  return "#AAAAAA";
+}
+
+// Draw rounded rectangle
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath(); ctx.fill();
 }
 
 async function generateNetworthImage(mojang, profileName, nw, essVal, essLines) {
-  // Dimensions
-  const W = 680;
-  const ITEM_H = 44;
-  const ICON = 32;
-  const PAD = 16;
-  const COL_W = (W - PAD*3) / 2;
+  const W = 700;
+  const PAD = 14;
+  const ITEM_H = 38;
+  const ICON = 28;
+  const COL_W = Math.floor((W - PAD * 3) / 2);
+  const HEADER_H = 145;
+  const FONT = "DejaVu, Arial, sans-serif";
 
-  // Calculate height needed
-  let leftH = 0, rightH = 0;
-  const leftCats = [], rightCats = [];
+  // Calculate column heights
+  let lH = 0, rH = 0;
+  const lCats = [], rCats = [];
   for (const cat of nw.categories) {
-    const h = 30 + (cat.items.length * ITEM_H) + 8;
-    if (leftH <= rightH) { leftCats.push(cat); leftH += h; }
-    else { rightCats.push(cat); rightH += h; }
+    const h = 32 + (Math.min(cat.items.length, 5) * ITEM_H) + 10;
+    if (lH <= rH) { lCats.push(cat); lH += h; }
+    else { rCats.push(cat); rH += h; }
   }
-  const bodyH = Math.max(leftH, rightH);
-  const HEADER_H = 160;
-  const H = HEADER_H + bodyH + PAD*2;
+  const bodyH = Math.max(lH, rH, 100);
+  const H = HEADER_H + bodyH + PAD + 20;
 
-  const canvas = createCanvas(W, Math.max(H, 300));
+  const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
-  // Background
-  ctx.fillStyle = "#0f0f1a";
-  ctx.fillRect(0, 0, W, canvas.height);
+  // ── BACKGROUND ──
+  ctx.fillStyle = "#111122";
+  ctx.fillRect(0, 0, W, H);
 
-  // Header gradient
+  // Header bg
   const hg = ctx.createLinearGradient(0, 0, W, HEADER_H);
-  hg.addColorStop(0, "#1a1a3e");
-  hg.addColorStop(1, "#0f0f1a");
-  ctx.fillStyle = hg;
-  ctx.fillRect(0, 0, W, HEADER_H);
+  hg.addColorStop(0, "#1c1c3a"); hg.addColorStop(1, "#111122");
+  ctx.fillStyle = hg; ctx.fillRect(0, 0, W, HEADER_H);
 
-  // Blue left bar
-  ctx.fillStyle = "#55AAFF";
-  ctx.fillRect(0, 0, 3, HEADER_H);
+  // Accent bar
+  ctx.fillStyle = "#55AAFF"; ctx.fillRect(0, 0, 4, HEADER_H);
 
-  // Player head
-  let headY = PAD;
+  // ── PLAYER HEAD ──
   try {
-    const headImg = await loadImage("https://mc-heads.net/avatar/" + mojang.id + "/40");
-    ctx.drawImage(headImg, PAD, headY, 40, 40);
-  } catch(e) {}
-
-  // Player name
-  ctx.fillStyle = "#55AAFF";
-  ctx.font = "bold 18px Arial, sans-serif";
-  ctx.fillText(mojang.name + "'s Networth on " + profileName, PAD + 48, headY + 16);
-
-  // Total networth
-  ctx.fillStyle = "#FFD700";
-  ctx.font = "bold 26px Arial, sans-serif";
-  ctx.fillText(fmtPrice(nw.total), PAD, headY + 62);
-
-  ctx.fillStyle = "#888888";
-  ctx.font = "12px Arial, sans-serif";
-  ctx.fillText(nw.total.toLocaleString(), PAD, headY + 80);
-
-  // Coins row
-  const coinItems = [
-    { label: "Purse", val: fmtPrice(nw.purse) },
-    { label: "Bank",  val: fmtPrice(nw.bank)  },
-    { label: "Essence", val: essVal > 0 ? fmtPrice(essVal) : "0" },
-  ];
-  let cx = PAD;
-  for (const c of coinItems) {
-    ctx.fillStyle = "#aaaacc";
-    ctx.font = "11px Arial, sans-serif";
-    ctx.fillText(c.label, cx, headY + 105);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 13px Arial, sans-serif";
-    ctx.fillText(c.val, cx, headY + 122);
-    cx += 160;
+    const headImg = await loadImage("https://mc-heads.net/avatar/" + mojang.id + "/48");
+    // Clip circle
+    ctx.save();
+    ctx.beginPath(); ctx.arc(PAD+24, PAD+24, 24, 0, Math.PI*2); ctx.clip();
+    ctx.drawImage(headImg, PAD, PAD, 48, 48);
+    ctx.restore();
+  } catch(e) {
+    ctx.fillStyle = "#334455"; ctx.fillRect(PAD, PAD, 48, 48);
   }
 
-  // Divider
-  ctx.fillStyle = "#333355";
-  ctx.fillRect(0, HEADER_H - 1, W, 1);
+  // ── PLAYER NAME ──
+  ctx.fillStyle = "#55AAFF";
+  ctx.font = "bold 17px " + FONT;
+  ctx.fillText(mojang.name + "'s Networth", PAD+58, PAD+20);
 
-  // Draw categories in two columns
-  async function drawCategories(cats, xOff) {
+  ctx.fillStyle = "#7788aa";
+  ctx.font = "13px " + FONT;
+  ctx.fillText("Profile: " + profileName, PAD+58, PAD+38);
+
+  // ── TOTAL NW ──
+  ctx.fillStyle = "#FFD700";
+  ctx.font = "bold 30px " + FONT;
+  ctx.fillText(fmtPrice(nw.total), PAD, PAD+90);
+
+  ctx.fillStyle = "#666688";
+  ctx.font = "12px " + FONT;
+  ctx.fillText("(" + nw.total.toLocaleString() + ")", PAD, PAD+108);
+
+  // ── COINS ROW ──
+  const coins = [
+    {label:"Purse", val:fmtPrice(nw.purse), color:"#FFD700"},
+    {label:"Bank",  val:fmtPrice(nw.bank),  color:"#88AAFF"},
+    {label:"Essence", val:essVal>0?fmtPrice(essVal):"0", color:"#AA88FF"},
+  ];
+  let coinX = PAD;
+  for (const c of coins) {
+    ctx.fillStyle = "#555577"; ctx.font = "11px " + FONT;
+    ctx.fillText(c.label, coinX, PAD+128);
+    ctx.fillStyle = c.color; ctx.font = "bold 13px " + FONT;
+    ctx.fillText(c.val, coinX, PAD+143);
+    coinX += 170;
+  }
+
+  // ── DIVIDER ──
+  ctx.fillStyle = "#2a2a44"; ctx.fillRect(0, HEADER_H, W, 2);
+
+  // ── DRAW CATEGORY COLUMN ──
+  async function drawCol(cats, xOff) {
     let y = HEADER_H + PAD;
     for (const cat of cats) {
-      // Category header
-      ctx.fillStyle = "#1e1e3a";
-      ctx.fillRect(xOff, y, COL_W, 26);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 13px Arial, sans-serif";
-      ctx.fillText(cat.label, xOff + 8, y + 17);
-      ctx.fillStyle = "#FFD700";
-      ctx.font = "bold 12px Arial, sans-serif";
+      // Category header pill
+      ctx.fillStyle = "#1e1e40";
+      roundRect(ctx, xOff, y, COL_W, 28, 6);
+
+      ctx.fillStyle = "#ffffff"; ctx.font = "bold 13px " + FONT;
+      ctx.fillText(cat.label, xOff+10, y+19);
+
+      ctx.fillStyle = "#FFD700"; ctx.font = "bold 12px " + FONT;
       const tw = ctx.measureText(fmtPrice(cat.total)).width;
-      ctx.fillText(fmtPrice(cat.total), xOff + COL_W - tw - 6, y + 17);
-      y += 30;
+      ctx.fillText(fmtPrice(cat.total), xOff+COL_W-tw-8, y+19);
 
-      for (const it of cat.items.slice(0, 5)) {
-        // Item row background
-        ctx.fillStyle = "rgba(255,255,255,0.03)";
-        ctx.fillRect(xOff, y, COL_W, ITEM_H - 2);
+      y += 34;
 
-        // Item icon
-        const img = await fetchItemImage(it.id);
-        if (img) {
-          ctx.drawImage(img, xOff + 4, y + 6, ICON, ICON);
-        } else {
-          ctx.fillStyle = "#2a2a4a";
-          ctx.fillRect(xOff + 4, y + 6, ICON, ICON);
-          ctx.fillStyle = "#555577";
-          ctx.font = "10px Arial";
-          ctx.fillText("?", xOff + 16, y + 25);
-        }
+      for (const it of cat.items.slice(0,5)) {
+        // Row bg
+        ctx.fillStyle = "rgba(255,255,255,0.025)";
+        roundRect(ctx, xOff, y, COL_W, ITEM_H-2, 4);
 
-        // Item name (truncate if needed)
-        ctx.fillStyle = "#ddddee";
-        ctx.font = "12px Arial, sans-serif";
+        // Colored item icon (Minecraft-style colored square)
+        const ic = itemColor(it.id);
+        ctx.fillStyle = ic+"33"; // transparent bg
+        ctx.fillRect(xOff+4, y+4, ICON, ICON);
+        ctx.fillStyle = ic;
+        ctx.fillRect(xOff+4, y+4, 3, ICON); // left color bar
+
+        // Item icon initial letter
+        ctx.fillStyle = ic; ctx.font = "bold 11px " + FONT;
+        ctx.fillText(it.name.charAt(0), xOff+12, y+20);
+
+        // Item name
+        ctx.fillStyle = "#ddeeff"; ctx.font = "12px " + FONT;
+        const maxW = COL_W - ICON - 75;
         let nameStr = it.name;
-        if (it.stars) nameStr += " " + fmtStarsCanvas(it.stars);
-        const maxW = COL_W - ICON - 90;
-        while (ctx.measureText(nameStr).width > maxW && nameStr.length > 4) {
-          nameStr = nameStr.slice(0, -4) + "...";
+        if (it.stars) {
+          const s1 = it.stars > 5 ? 5 : it.stars;
+          const s2 = it.stars > 5 ? it.stars-5 : 0;
+          nameStr += " " + "✫".repeat(s1) + "★".repeat(s2);
         }
-        ctx.fillText(nameStr, xOff + ICON + 10, y + 20);
+        while (ctx.measureText(nameStr).width > maxW && nameStr.length > 5) nameStr = nameStr.slice(0,-4)+"...";
+        ctx.fillText(nameStr, xOff+ICON+8, y+19);
 
         // Price
-        ctx.fillStyle = "#FFD700";
-        ctx.font = "bold 11px Arial, sans-serif";
-        const pStr = fmtPrice(it.price);
-        const pw = ctx.measureText(pStr).width;
-        ctx.fillText(pStr, xOff + COL_W - pw - 4, y + 20);
+        ctx.fillStyle = "#FFD700"; ctx.font = "bold 11px " + FONT;
+        const ps = fmtPrice(it.price);
+        const pw = ctx.measureText(ps).width;
+        ctx.fillText(ps, xOff+COL_W-pw-5, y+19);
 
         y += ITEM_H;
       }
-      y += 8;
+      y += 10;
     }
   }
 
-  await Promise.all([
-    drawCategories(leftCats,  PAD),
-    drawCategories(rightCats, PAD + COL_W + PAD),
-  ]);
+  await drawCol(lCats, PAD);
+  await drawCol(rCats, PAD+COL_W+PAD);
 
-  // Footer
-  ctx.fillStyle = "#444466";
-  ctx.font = "10px Arial, sans-serif";
-  ctx.fillText("Prices: Moulberry BIN + Bazaar  |  Item images: FurfSky Reborn via sky.shiiyu.moe", PAD, canvas.height - 6);
+  // ── FOOTER ──
+  ctx.fillStyle = "#333355"; ctx.font = "10px " + FONT;
+  ctx.fillText("Prices: Moulberry BIN + Bazaar  |  Stars & enchants estimated", PAD, H-6);
 
   return canvas.toBuffer("image/png");
 }
