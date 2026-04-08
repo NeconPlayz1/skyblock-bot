@@ -153,7 +153,14 @@ async function calcNetworth(member, profile) {
 }
 
 /* HELPERS */
-function getActive(p) { return p?.find(x => x.selected) || p?.[0] || null; }
+function getActive(p, profileName) {
+  if (!p?.length) return null;
+  if (profileName) {
+    const found = p.find(x => x.cute_name?.toLowerCase() === profileName.toLowerCase());
+    if (found) return found;
+  }
+  return p.find(x => x.selected) || p[0];
+}
 function getMember(p, uuid) { return p?.members?.[uuid] || null; }
 async function resolveUser(i) {
   const v = i.options.getString("username"); if (v) return v;
@@ -218,8 +225,10 @@ const commands=[
   new SlashCommandBuilder().setName("link").setDescription("Link your Minecraft account").addStringOption(o=>o.setName("username").setDescription("Your Minecraft username").setRequired(true)),
   new SlashCommandBuilder().setName("unlink").setDescription("Unlink your Minecraft account"),
   new SlashCommandBuilder().setName("whoami").setDescription("Show your linked account"),
-  new SlashCommandBuilder().setName("stats").setDescription("Full Skyblock stats overview").addStringOption(uOpt),
-  new SlashCommandBuilder().setName("networth").setDescription("Full networth with item breakdown").addStringOption(uOpt),
+  new SlashCommandBuilder().setName("stats").setDescription("Full Skyblock stats overview").addStringOption(uOpt)
+    .addStringOption(o=>o.setName("profile").setDescription("Profile name e.g. Kiwi, Apple (default: active)").setRequired(false)),
+  new SlashCommandBuilder().setName("networth").setDescription("Full networth with item breakdown").addStringOption(uOpt)
+    .addStringOption(o=>o.setName("profile").setDescription("Profile name e.g. Kiwi, Apple (default: active)").setRequired(false)),
   new SlashCommandBuilder().setName("skills").setDescription("View skill levels with XP bars").addStringOption(uOpt),
   new SlashCommandBuilder().setName("slayer").setDescription("View slayer boss levels with kill counts").addStringOption(uOpt),
   new SlashCommandBuilder().setName("dungeons").setDescription("View Catacombs stats and class levels").addStringOption(uOpt),
@@ -291,8 +300,11 @@ client.on("interactionCreate",async interaction=>{
     if(cmd==="stats"){
       const username=await resolveUser(interaction);
       const mojang=await fetchMojang(username);
+      // Bust profile cache on fresh request
+      cache.del("pr_"+mojang.id);
       const profiles=await fetchProfiles(mojang.id);
-      const profile=getActive(profiles);
+      const profileName=interaction.options.getString("profile")||null;
+      const profile=getActive(profiles, profileName);
       const member=getMember(profile,mojang.id);
       if(!member)return interaction.editReply("No Skyblock data for **"+mojang.name+"**.");
       const purse=member.coin_purse||member.currencies?.coin_purse||0;
@@ -330,9 +342,13 @@ client.on("interactionCreate",async interaction=>{
     if(cmd==="networth"){
       const username=await resolveUser(interaction);
       const mojang=await fetchMojang(username);
+      // Bust cache so we always get fresh profile data
+      cache.del("pr_"+mojang.id);
       const profiles=await fetchProfiles(mojang.id);
-      const profile=getActive(profiles);
+      const profileOpt=interaction.options.getString("profile")||null;
+      const profile=getActive(profiles, profileOpt);
       const member=getMember(profile,mojang.id);
+      if(profile?.profile_id) cache.del("nw_"+profile.profile_id);
       if(!member)return interaction.editReply("No Skyblock data for **"+mojang.name+"**.");
       const profileName=profile?.cute_name||"Unknown";
       const nw=await calcNetworth(member,profile);
